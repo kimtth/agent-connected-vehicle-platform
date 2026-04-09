@@ -1,21 +1,17 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends
 from utils.logging_config import get_logger
 from models.api_responses import ActionResponse
 from models.agent_request import DoorControlRequest, EngineControlRequest
 from agents.agent_manager import AgentManager
-from agents.remote_access_agent import RemoteAccessPlugin
 
 logger = get_logger(__name__)
-logger.debug("remote_access_routes module imported successfully")
 
 router = APIRouter(
     prefix="/vehicles/{vehicle_id}/remote-access", tags=["Remote Access"]
 )
 
 
-# Lazy dependency resolver to avoid circular import issues
 async def _get_agent_manager() -> AgentManager:
-    """Create AgentManager instance for dependency injection."""
     return AgentManager()
 
 
@@ -23,7 +19,6 @@ async def _get_agent_manager() -> AgentManager:
 async def control_doors(
     vehicle_id: str,
     request: DoorControlRequest,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
     agent_manager=Depends(_get_agent_manager),
 ):
     """Lock or unlock vehicle doors remotely"""
@@ -33,32 +28,17 @@ async def control_doors(
             "query": f"{request.action} doors",
             "session_id": f"doors_{vehicle_id}",
         }
-
-        if direct_api_call:
-            plugin = RemoteAccessPlugin()
-            lock = request.action.lower() == "lock"
-            plugin_resp = await plugin._handle_door_lock(
-                vehicle_id=vehicle_id,
-                lock=lock,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
         response = await agent_manager.process_request(
             f"{request.action} the vehicle doors", context
         )
-
         if not response.get("success", False):
             raise HTTPException(
                 status_code=400,
                 detail=response.get("response", "Failed to control doors"),
             )
-
         return ActionResponse(data=response)
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error controlling doors for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -68,7 +48,6 @@ async def control_doors(
 async def control_engine(
     vehicle_id: str,
     request: EngineControlRequest,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
     agent_manager=Depends(_get_agent_manager),
 ):
     """Start or stop vehicle engine remotely"""
@@ -78,32 +57,17 @@ async def control_engine(
             "query": f"{request.action} engine",
             "session_id": f"engine_{vehicle_id}",
         }
-
-        if direct_api_call:
-            plugin = RemoteAccessPlugin()
-            start = request.action.lower() == "start"
-            plugin_resp = await plugin._handle_engine_control(
-                vehicle_id=vehicle_id,
-                start=start,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
         response = await agent_manager.process_request(
             f"{request.action} the vehicle engine", context
         )
-
         if not response.get("success", False):
             raise HTTPException(
                 status_code=400,
                 detail=response.get("response", "Failed to control engine"),
             )
-
         return ActionResponse(data=response)
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error controlling engine for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -112,8 +76,7 @@ async def control_engine(
 @router.post("/locate", response_model=ActionResponse)
 async def locate_vehicle(
     vehicle_id: str,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
-    agent_manager=Depends(_get_agent_manager)
+    agent_manager=Depends(_get_agent_manager),
 ):
     """Activate horn and lights to locate vehicle"""
     try:
@@ -122,30 +85,17 @@ async def locate_vehicle(
             "query": "locate vehicle",
             "session_id": f"locate_{vehicle_id}",
         }
-
-        if direct_api_call:
-            plugin = RemoteAccessPlugin()
-            plugin_resp = await plugin._handle_horn_lights(
-                vehicle_id=vehicle_id,
-                action="locate",
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
         response = await agent_manager.process_request(
             "activate horn and lights to help me find my vehicle", context
         )
-
         if not response.get("success", False):
             raise HTTPException(
                 status_code=400,
                 detail=response.get("response", "Failed to locate vehicle"),
             )
-
         return ActionResponse(data=response)
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error locating vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

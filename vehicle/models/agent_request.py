@@ -4,9 +4,9 @@ from models.base import BaseSchemaModel
 
 class AgentQueryRequest(BaseSchemaModel):
     query: str
-    context: Optional[Dict[str, Any]]
-    session_id: Optional[str]
-    stream: Optional[bool]
+    context: Optional[Dict[str, Any]] = None
+    session_id: Optional[str] = None
+    stream: Optional[bool] = False
 
 
 class AnalysisRequest(BaseSchemaModel):
@@ -18,7 +18,6 @@ class AnalysisRequest(BaseSchemaModel):
 class ServiceRecommendationRequest(BaseSchemaModel):
     vehicle_id: str
     mileage: Optional[int] = None
-    last_service_date: Optional[str] = None
     last_service_date: Optional[str] = None
 
 

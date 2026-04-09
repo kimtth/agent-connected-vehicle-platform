@@ -32,6 +32,12 @@ def start_poi_server(host: str | None = None, port: int = 8003):
     if host is None:
         host = "127.0.0.1"
     logger.info(f"Starting POI MCP server on {host}:{port}")
-    mcp_poi_server.run(transport="http", host=host, port=port, path="/mcp")
+    mcp_poi_server.run(
+        transport="http",
+        host=host,
+        port=port,
+        path="/mcp",
+        uvicorn_config={"ws": "websockets"},
+    )
     logger.info(f"POI MCP server exited on {host}:{port}")
 

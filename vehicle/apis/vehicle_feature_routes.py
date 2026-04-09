@@ -1,19 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from utils.logging_config import get_logger
 from models.api_responses import ActionResponse
 from models.agent_request import LightsControlRequest, ClimateControlRequest, WindowsControlRequest
 from agents.agent_manager import AgentManager
-from agents.vehicle_feature_control_agent import VehicleFeatureControlPlugin
 
 logger = get_logger(__name__)
 router = APIRouter(
-    prefix="/vehicles/{vehicle_id}/features", 
-    tags=["Vehicle Features"]
+    prefix="/vehicles/{vehicle_id}/features",
+    tags=["Vehicle Features"],
 )
 
 
-# Import agent_manager locally to avoid circular import
-def _get_agent_manager() -> AgentManager:
+async def _get_agent_manager() -> AgentManager:
     return AgentManager()
 
 
@@ -21,41 +19,23 @@ def _get_agent_manager() -> AgentManager:
 async def control_lights(
     vehicle_id: str,
     request: LightsControlRequest,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
-    agent_manager=Depends(_get_agent_manager)
+    agent_manager=Depends(_get_agent_manager),
 ):
     """Control vehicle lights (headlights, interior, hazard)"""
     try:
         context = {
             "vehicle_id": vehicle_id,
             "query": f"turn {request.action} {request.light_type}",
-            "session_id": f"lights_{vehicle_id}"
+            "session_id": f"lights_{vehicle_id}",
         }
-        
-        if direct_api_call:
-            plugin = VehicleFeatureControlPlugin()
-            plugin_resp = await plugin._handle_lights_control(
-                vehicle_id=vehicle_id,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
-        
         response = await agent_manager.process_request(
-            f"turn {request.action} the {request.light_type}",
-            context
+            f"turn {request.action} the {request.light_type}", context
         )
-        
         if not response.get("success", False):
             raise HTTPException(status_code=400, detail=response.get("response", "Failed to control lights"))
-        
-        return ActionResponse(
-            data=response
-        )
-        
+        return ActionResponse(data=response)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error controlling lights for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -65,41 +45,24 @@ async def control_lights(
 async def control_climate(
     vehicle_id: str,
     request: ClimateControlRequest,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
-    agent_manager=Depends(_get_agent_manager)
+    agent_manager=Depends(_get_agent_manager),
 ):
     """Control vehicle climate settings"""
     try:
         context = {
             "vehicle_id": vehicle_id,
             "query": f"set climate to {request.temperature} degrees {request.action}",
-            "session_id": f"climate_{vehicle_id}"
+            "session_id": f"climate_{vehicle_id}",
         }
-        
-        if direct_api_call:
-            plugin = VehicleFeatureControlPlugin()
-            plugin_resp = await plugin._handle_climate_control(
-                vehicle_id=vehicle_id,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
-        
         response = await agent_manager.process_request(
             f"set the climate control to {request.temperature} degrees with {request.action}",
-            context
+            context,
         )
-        
         if not response.get("success", False):
             raise HTTPException(status_code=400, detail=response.get("response", "Failed to control climate"))
-        
-        return ActionResponse(
-            data=response
-        )
-        
+        return ActionResponse(data=response)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error controlling climate for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -109,41 +72,23 @@ async def control_climate(
 async def control_windows(
     vehicle_id: str,
     request: WindowsControlRequest,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
-    agent_manager=Depends(_get_agent_manager)
+    agent_manager=Depends(_get_agent_manager),
 ):
     """Control vehicle windows"""
     try:
         context = {
             "vehicle_id": vehicle_id,
             "query": f"roll {request.action} {request.windows} windows",
-            "session_id": f"windows_{vehicle_id}"
+            "session_id": f"windows_{vehicle_id}",
         }
-        
-        if direct_api_call:
-            plugin = VehicleFeatureControlPlugin()
-            plugin_resp = await plugin._handle_windows_control(
-                vehicle_id=vehicle_id,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
-        
         response = await agent_manager.process_request(
-            f"roll {request.action} the {request.windows} windows",
-            context
+            f"roll {request.action} the {request.windows} windows", context
         )
-        
         if not response.get("success", False):
             raise HTTPException(status_code=400, detail=response.get("response", "Failed to control windows"))
-        
-        return ActionResponse(
-            data=response
-        )
-        
+        return ActionResponse(data=response)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error controlling windows for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -152,38 +97,18 @@ async def control_windows(
 @router.get("/status", response_model=ActionResponse)
 async def get_feature_status(
     vehicle_id: str,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
-    agent_manager=Depends(_get_agent_manager)
+    agent_manager=Depends(_get_agent_manager),
 ):
     """Get current status of vehicle features"""
     try:
         context = {
             "vehicle_id": vehicle_id,
-            "session_id": f"status_{vehicle_id}"
+            "session_id": f"status_{vehicle_id}",
         }
-        
-        if direct_api_call:
-            plugin = VehicleFeatureControlPlugin()
-            plugin_resp = await plugin._handle_feature_status(
-                vehicle_id=vehicle_id,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
-        
         response = await agent_manager.process_request(
-            "show me the current status of vehicle features",
-            context
+            "show me the current status of vehicle features", context
         )
-        
-        return ActionResponse(
-            data=response
-        )
-        
+        return ActionResponse(data=response)
     except Exception as e:
         logger.error(f"Error getting feature status for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
-

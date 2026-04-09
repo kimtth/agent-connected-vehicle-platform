@@ -1,334 +1,251 @@
 import datetime
-from typing import Any, Dict, Optional, Annotated
+from typing import Any, Dict, Annotated
 import uuid
+
+from agent_framework import tool
 from azure.cosmos_db import get_cosmos_client
-from semantic_kernel.functions import kernel_function
-from semantic_kernel.agents import ChatCompletionAgent
-from plugin.oai_service import create_chat_service
 from utils.logging_config import get_logger
-from agents.base.base_agent import BasePlugin
-from utils.agent_context import extract_vehicle_id
-from models.command import Command  
-import json
+from agents.base.base_agent import format_tool_response
+from models.command import Command
+from pydantic import Field
 
 logger = get_logger(__name__)
 
+_PLUGIN = "VehicleFeatureControlPlugin"
 
-class VehicleFeatureControlAgent:
-    """
-    Vehicle Feature Control Agent for managing vehicle features and settings.
-    """
 
-    def __init__(self):
-        """Initialize the Vehicle Feature Control Agent."""
-        self.cosmos_client = get_cosmos_client()
-        service_factory = create_chat_service()
-        self.agent = ChatCompletionAgent(
-            service=service_factory,
-            name="VehicleFeatureControlAgent",
-            instructions=(
-                "You specialize in controlling vehicle features like climate, seats, and entertainment. "
-                "IMPORTANT: Return the EXACT JSON response from your plugin functions without modification."
-            ),
-            plugins=[VehicleFeatureControlPlugin()],
+async def _apply_status_update(vehicle_id: str, patch: Dict[str, Any]):
+    """Merge patch into vehicle status and persist."""
+    cosmos_client = get_cosmos_client()
+    try:
+        current = await cosmos_client.get_vehicle_status(vehicle_id) or {}
+        if not isinstance(current, dict):
+            try:
+                current = current.model_dump()
+            except Exception:
+                current = {}
+        current.update(patch)
+        if hasattr(cosmos_client, "update_vehicle_status"):
+            await cosmos_client.update_vehicle_status(vehicle_id, current)
+        elif hasattr(cosmos_client, "set_vehicle_status"):
+            await cosmos_client.set_vehicle_status(vehicle_id, current)
+        else:
+            container = getattr(cosmos_client, "status_container", None)
+            if container:
+                await container.upsert_item({"id": vehicle_id, "vehicle_id": vehicle_id, **current})
+    except Exception as e:
+        logger.debug(f"Status update skipped ({vehicle_id}): {e}")
+
+
+@tool(name="handle_lights_control", description="Control vehicle lights (headlights, interior, etc.)", approval_mode="never_require")
+async def handle_lights_control(
+    vehicle_id: Annotated[str, Field(description="Vehicle GUID whose lights to control")] = "",
+    light_type: Annotated[str, Field(description="Type of light: headlights, interior_lights, or hazard_lights")] = "headlights",
+    action: Annotated[str, Field(description="Action: on or off")] = "on",
+) -> str:
+    cosmos_client = get_cosmos_client()
+    if not vehicle_id:
+        return format_tool_response(
+            "Please specify which vehicle you'd like to control lights for.",
+            success=False, plugin_name=_PLUGIN,
+        )
+
+    try:
+        await cosmos_client.ensure_connected()
+
+        command_obj = Command(
+            id=str(uuid.uuid4()),
+            command_id=f"lights_{action}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+            vehicle_id=vehicle_id,
+            command_type=f"lights_{action}",
+            parameters={"lightType": light_type},
+            status="sent",
+            timestamp=datetime.datetime.now().isoformat(),
+            priority="normal",
+        )
+        await cosmos_client.create_command(command_obj.model_dump(by_alias=True))
+
+        await _apply_status_update(
+            vehicle_id,
+            {
+                "lights": {
+                    "type": light_type,
+                    "state": action,
+                    "updatedAt": datetime.datetime.now().isoformat(),
+                }
+            },
+        )
+        return format_tool_response(
+            f"I've turned {action} the {light_type.replace('_', ' ')} for your vehicle.",
+            data={
+                "action": f"lights_{action}",
+                "vehicleId": vehicle_id,
+                "lightType": light_type,
+                "commandId": command_obj.command_id,
+            },
+            function_name="handle_lights_control", plugin_name=_PLUGIN,
+        )
+    except Exception:
+        return format_tool_response(
+            "I encountered an error while controlling the lights. Please try again.",
+            success=False, function_name="handle_lights_control", plugin_name=_PLUGIN,
         )
 
 
-class VehicleFeatureControlPlugin(BasePlugin):
-    """Plugin for vehicle feature control operations."""
+@tool(name="handle_climate_control", description="Control vehicle climate settings", approval_mode="never_require")
+async def handle_climate_control(
+    vehicle_id: Annotated[str, Field(description="Vehicle GUID whose climate to control")] = "",
+    temperature: Annotated[int, Field(description="Desired temperature in Celsius (16-30)")] = 22,
+    mode: Annotated[str, Field(description="Climate mode: set_temperature, heating, or cooling")] = "set_temperature",
+) -> str:
+    cosmos_client = get_cosmos_client()
+    if not vehicle_id:
+        return format_tool_response(
+            "Please specify which vehicle you'd like to control climate for.",
+            success=False, plugin_name=_PLUGIN,
+        )
 
-    def __init__(self):
-        # Get the singleton cosmos client instance
-        self.cosmos_client = get_cosmos_client()
+    try:
+        await cosmos_client.ensure_connected()
 
-    async def _apply_status_update(self, vehicle_id: str, patch: Dict[str, Any]):
-        try:
-            current = await self.cosmos_client.get_vehicle_status(vehicle_id) or {}
-            if not isinstance(current, dict):
-                try:
-                    current = current.model_dump()
-                except Exception:
-                    current = {}
-            current.update(patch)
-            if hasattr(self.cosmos_client, "update_vehicle_status"):
-                await self.cosmos_client.update_vehicle_status(vehicle_id, current)
-            elif hasattr(self.cosmos_client, "set_vehicle_status"):
-                await self.cosmos_client.set_vehicle_status(vehicle_id, current)
-            else:
-                container = getattr(self.cosmos_client, "status_container", None)
-                if container:
-                    await container.upsert_item({"id": vehicle_id, "vehicle_id": vehicle_id, **current})
-        except Exception as e:
-            logger.debug(f"Status update skipped ({vehicle_id}): {e}")
+        command_obj = Command(
+            id=str(uuid.uuid4()),
+            command_id=f"climate_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+            vehicle_id=vehicle_id,
+            command_type="climate_control",
+            parameters={
+                "action": mode,
+                "temperature": temperature,
+                "auto": True
+            },
+            status="sent",
+            timestamp=datetime.datetime.now().isoformat(),
+            priority="normal",
+        )
+        await cosmos_client.create_command(command_obj.model_dump(by_alias=True))
 
-    @kernel_function(description="Control vehicle lights (headlights, interior, etc.)")
-    async def _handle_lights_control(
-        self,
-        vehicle_id: Annotated[str, "Vehicle GUID whose lights to control"] = "",
-        call_context: Annotated[Dict[str, Any], "Invocation context with natural language query"] = {},
-        **kwargs
-    ) -> Dict[str, Any]:
-        vid = extract_vehicle_id(call_context, vehicle_id or None)
-        query = call_context.get("query", "") if call_context else ""
-        if not vid:
-            return self._format_response(
-                "Please specify which vehicle you'd like to control lights for.",
-                success=False,
-            )
+        await _apply_status_update(
+            vehicle_id,
+            {
+                "climate": {
+                    "mode": mode,
+                    "temperatureC": temperature,
+                    "auto": True,
+                    "updatedAt": datetime.datetime.now().isoformat(),
+                }
+            },
+        )
+        return format_tool_response(
+            f"I've set the climate control to {temperature}°C with {mode} mode.",
+            data={
+                "action": "climate_control",
+                "vehicleId": vehicle_id,
+                "temperature": temperature,
+                "mode": mode,
+                "commandId": command_obj.command_id,
+            },
+            function_name="handle_climate_control", plugin_name=_PLUGIN,
+        )
+    except Exception:
+        return format_tool_response(
+            "I encountered an error while adjusting the climate control. Please try again.",
+            success=False, function_name="handle_climate_control", plugin_name=_PLUGIN,
+        )
 
-        try:
-            # Extract light type and action from context
-            light_type = "headlights"  # default
-            action = "on"  # default
-            
-            if "interior" in query.lower():
-                light_type = "interior_lights"
-            elif "hazard" in query.lower():
-                light_type = "hazard_lights"
-            
-            if "off" in query.lower() or "turn off" in query.lower():
-                action = "off"
 
-            await self.cosmos_client.ensure_connected()
+@tool(name="handle_windows_control", description="Control vehicle windows", approval_mode="never_require")
+async def handle_windows_control(
+    vehicle_id: Annotated[str, Field(description="Vehicle GUID whose windows to control")] = "",
+    action: Annotated[str, Field(description="Action: up (close) or down (open)")] = "up",
+    window_position: Annotated[str, Field(description="Which windows: all, driver, or passenger")] = "all",
+) -> str:
+    cosmos_client = get_cosmos_client()
+    if not vehicle_id:
+        return format_tool_response(
+            "Please specify which vehicle you'd like to control windows for.",
+            success=False, plugin_name=_PLUGIN,
+        )
 
-            # Create command
-            command_obj = Command(
-                id=str(uuid.uuid4()),
-                command_id=f"lights_{action}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
-                vehicle_id=vid,
-                command_type=f"lights_{action}",
-                parameters={"lightType": light_type},
-                status="sent",
-                timestamp=datetime.datetime.now().isoformat(),
-                priority="normal",
-            )
-            await self.cosmos_client.create_command(command_obj.model_dump(by_alias=True))
+    try:
+        await cosmos_client.ensure_connected()
 
-            await self._apply_status_update(
-                vid,
-                {
-                    "lights": {
-                        "type": light_type,
-                        "state": action,
-                        "updatedAt": datetime.datetime.now().isoformat(),
-                    }
-                },
-            )
-            return self._format_response(
-                f"I've turned {action} the {light_type.replace('_', ' ')} for your vehicle.",
-                data={
-                    "action": f"lights_{action}",
-                    "vehicleId": vid,
-                    "lightType": light_type,
-                    "commandId": command_obj.command_id,
-                },
-                function_name="_handle_lights_control",
-            )
-        except Exception as e:
-            return self._format_response(
-                "I encountered an error while controlling the lights. Please try again.",
-                success=False,
-                function_name="_handle_lights_control",
-            )
+        command_obj = Command(
+            id=str(uuid.uuid4()),
+            command_id=f"windows_{action}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+            vehicle_id=vehicle_id,
+            command_type=f"windows_{action}",
+            parameters={"windows": window_position},
+            status="sent",
+            timestamp=datetime.datetime.now().isoformat(),
+            priority="normal",
+        )
+        await cosmos_client.create_command(command_obj.model_dump(by_alias=True))
 
-    @kernel_function(description="Control vehicle climate settings")
-    async def _handle_climate_control(
-        self,
-        vehicle_id: Annotated[str, "Vehicle GUID whose climate to control"] = "",
-        call_context: Annotated[Dict[str, Any], "Invocation context with desired temp/query"] = {},
-        **kwargs
-    ) -> Dict[str, Any]:
-        vid = extract_vehicle_id(call_context, vehicle_id or None)
-        query = call_context.get("query", "") if call_context else ""
-        if not vid:
-            return self._format_response(
-                "Please specify which vehicle you'd like to control climate for.",
-                success=False,
-            )
+        await _apply_status_update(
+            vehicle_id,
+            {
+                "windows": {
+                    "target": window_position,
+                    "state": action,
+                    "updatedAt": datetime.datetime.now().isoformat(),
+                }
+            },
+        )
+        window_text = f"{window_position} windows" if window_position != "all" else "all windows"
+        action_text = "rolled up" if action == "up" else "rolled down"
 
-        try:
-            # Extract temperature and settings
-            temperature = 22  # default
-            action = "set_temperature"
-            
-            # Simple parsing for temperature
-            words = query.split()
-            for word in words:
-                if word.isdigit():
-                    temp_val = int(word)
-                    if 16 <= temp_val <= 30:
-                        temperature = temp_val
-                        break
+        return format_tool_response(
+            f"I've {action_text} the {window_text} for your vehicle.",
+            data={
+                "action": f"windows_{action}",
+                "vehicleId": vehicle_id,
+                "windows": window_position,
+                "commandId": command_obj.command_id,
+            },
+            function_name="handle_windows_control", plugin_name=_PLUGIN,
+        )
+    except Exception:
+        return format_tool_response(
+            "I encountered an error while controlling the windows. Please try again.",
+            success=False, function_name="handle_windows_control", plugin_name=_PLUGIN,
+        )
 
-            if "heat" in query.lower():
-                action = "heating"
-                temperature = max(24, temperature)
-            elif "cool" in query.lower() or "ac" in query.lower():
-                action = "cooling"
-                temperature = min(20, temperature)
 
-            await self.cosmos_client.ensure_connected()
-
-            command_obj = Command(
-                id=str(uuid.uuid4()),
-                command_id=f"climate_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
-                vehicle_id=vid,
-                command_type="climate_control",
-                parameters={
-                    "action": action,
-                    "temperature": temperature,
-                    "auto": True
-                },
-                status="sent",
-                timestamp=datetime.datetime.now().isoformat(),
-                priority="normal",
-            )
-            await self.cosmos_client.create_command(command_obj.model_dump(by_alias=True))
-
-            await self._apply_status_update(
-                vid,
-                {
-                    "climate": {
-                        "mode": action,
-                        "temperatureC": temperature,
-                        "auto": True,
-                        "updatedAt": datetime.datetime.now().isoformat(),
-                    }
-                },
-            )
-            return self._format_response(
-                f"I've set the climate control to {temperature}°C with {action} mode.",
-                data={
-                    "action": "climate_control",
-                    "vehicleId": vid,
-                    "temperature": temperature,
-                    "mode": action,
-                    "commandId": command_obj.command_id,
-                },
-                function_name="_handle_climate_control",
-            )
-        except Exception as e:
-            return self._format_response(
-                "I encountered an error while adjusting the climate control. Please try again.",
-                success=False,
-                function_name="_handle_climate_control",
-            )
-
-    @kernel_function(description="Control vehicle windows")
-    async def _handle_windows_control(
-        self,
-        vehicle_id: Annotated[str, "Vehicle GUID whose windows to control"] = "",
-        call_context: Annotated[Dict[str, Any], "Invocation context with window action"] = {},
-        **kwargs
-    ) -> Dict[str, Any]:
-        vid = extract_vehicle_id(call_context, vehicle_id or None)
-        query = call_context.get("query", "") if call_context else ""
-        if not vid:
-            return self._format_response(
-                "Please specify which vehicle you'd like to control windows for.",
-                success=False,
-            )
-
-        try:
-            action = "up" if "up" in query.lower() or "close" in query.lower() else "down"
-            window_position = "all"
-            
-            if "driver" in query.lower():
-                window_position = "driver"
-            elif "passenger" in query.lower():
-                window_position = "passenger"
-
-            await self.cosmos_client.ensure_connected()
-
-            command_obj = Command(
-                id=str(uuid.uuid4()),
-                command_id=f"windows_{action}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
-                vehicle_id=vid,
-                command_type=f"windows_{action}",
-                parameters={"windows": window_position},
-                status="sent",
-                timestamp=datetime.datetime.now().isoformat(),
-                priority="normal",
-            )
-            await self.cosmos_client.create_command(command_obj.model_dump(by_alias=True))
-
-            await self._apply_status_update(
-                vid,
-                {
-                    "windows": {
-                        "target": window_position,
-                        "state": action,
-                        "updatedAt": datetime.datetime.now().isoformat(),
-                    }
-                },
-            )
-            window_text = f"{window_position} windows" if window_position != "all" else "all windows"
-            action_text = "rolled up" if action == "up" else "rolled down"
-
-            return self._format_response(
-                f"I've {action_text} the {window_text} for your vehicle.",
-                data={
-                    "action": f"windows_{action}",
-                    "vehicleId": vid,
-                    "windows": window_position,
-                    "commandId": command_obj.command_id,
-                },
-                function_name="_handle_windows_control",
-            )
-        except Exception as e:
-            return self._format_response(
-                "I encountered an error while controlling the windows. Please try again.",
-                success=False,
-                function_name="_handle_windows_control",
-            )
-
-    @kernel_function(description="Get current vehicle feature status")
-    async def _handle_feature_status(
-        self,
-        vehicle_id: Annotated[str, "Vehicle GUID to get feature status for"] = "",
-        call_context: Annotated[Dict[str, Any], "Invocation context"] = {},
-        **kwargs
-    ) -> Dict[str, Any]:
-        vid = extract_vehicle_id(call_context, vehicle_id or None)
-        if not vid:
-            return self._format_response("Please specify which vehicle to check.", success=False)
-        try:
-            await self.cosmos_client.ensure_connected()
-            status = await self.cosmos_client.get_vehicle_status(vid) or {}
-            features = {
-                "lights": status.get("lights"),
-                "climate": status.get("climate"),
-                "windows": status.get("windows"),
-                "doorsLocked": status.get("doorsLocked"),
-                "engineRunning": status.get("engineRunning"),
-            }
-            return self._format_response(
-                "Feature status retrieved.",
-                data={"vehicleId": vid, "features": features},
-                function_name="_handle_feature_status",
-            )
-        except Exception as e:
-            return self._format_response(
-                "Unable to retrieve feature status.",
-                success=False,
-                function_name="_handle_feature_status",
-            )
-
-    def _format_response(
-        self,
-        message: str,
-        success: bool = True,
-        data: Optional[Dict[str, Any]] = None,
-        function_name: str = "",
-    ) -> str:  # Changed from Dict to str
-        """Return JSON string to preserve structure through SK's LLM layer."""
-        resp = {
-            "message": message,
-            "success": success,
-            "plugins_used": [f"{self.__class__.__name__}.{function_name}"] if function_name else [self.__class__.__name__],
+@tool(name="handle_feature_status", description="Get current vehicle feature status", approval_mode="never_require")
+async def handle_feature_status(
+    vehicle_id: Annotated[str, Field(description="Vehicle GUID to get feature status for")] = "",
+) -> str:
+    cosmos_client = get_cosmos_client()
+    if not vehicle_id:
+        return format_tool_response(
+            "Please specify which vehicle to check.", success=False,
+            plugin_name=_PLUGIN,
+        )
+    try:
+        await cosmos_client.ensure_connected()
+        status = await cosmos_client.get_vehicle_status(vehicle_id) or {}
+        features = {
+            "lights": status.get("lights"),
+            "climate": status.get("climate"),
+            "windows": status.get("windows"),
+            "doorsLocked": status.get("doorsLocked"),
+            "engineRunning": status.get("engineRunning"),
         }
-        if data:
-            resp["data"] = data
-        return json.dumps(resp)  # Return JSON string instead of dict
+        return format_tool_response(
+            "Feature status retrieved.",
+            data={"vehicleId": vehicle_id, "features": features},
+            function_name="handle_feature_status", plugin_name=_PLUGIN,
+        )
+    except Exception:
+        return format_tool_response(
+            "Unable to retrieve feature status.",
+            success=False, function_name="handle_feature_status", plugin_name=_PLUGIN,
+        )
 
 
+VEHICLE_FEATURE_CONTROL_TOOLS = [
+    handle_lights_control,
+    handle_climate_control,
+    handle_windows_control,
+    handle_feature_status,
+]

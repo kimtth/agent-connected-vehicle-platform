@@ -1,19 +1,19 @@
-from __future__ import annotations
-"""
-Endpoints for interacting with the agentic components of the connected vehicle platform.
-"""
+"""Endpoints for interacting with the agentic components of the connected vehicle platform."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+import logging
+import uuid
 from typing import TYPE_CHECKING, Union
+
 from models.agent_request import (
     AgentQueryRequest,
     AnalysisRequest,
     ServiceRecommendationRequest,
 )
 from models.agent_response import AgentServiceResponse, StreamingChunk
-import uuid
-import logging
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ def _build_service_response(raw: dict, session_id: str, vehicle_id: str | None =
         error=raw.get("error"),
         vehicle_id=vehicle_id,
     )
+
 
 def _streaming_chunk_from(raw: dict, session_id: str) -> StreamingChunk:
     return StreamingChunk(

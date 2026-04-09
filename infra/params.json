@@ -26,9 +26,9 @@
     "deployPrivateDnsZone": { "value": true },
 
     "azureOpenAiEndpoint": { "value": "https://your-endpoint-name.openai.azure.com/" },
-    "azureOpenAiDeploymentName": { "value": "gpt-5" },
+    "azureOpenAiModel": { "value": "gpt-5" },
     "azureOpenAiApiVersion": { "value": "2025-01-01-preview" },
-    "azureOpenAiApiKey": { "value": "<replace-with-azure-openai-key>" },
+    "azureOpenAiResourceId": { "value": "/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.CognitiveServices/accounts/<openai-account-name>" },
     "azureSpeechKey": { "value": "<replace-with-speech-key>" },
 
     "azureTenantId": { "value": "<tenant-guid>" },

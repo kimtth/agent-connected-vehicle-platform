@@ -41,7 +41,7 @@ MODULE_LOG_LEVELS = {
     "uvicorn.error": "WARNING",
     "uvicorn.access": "WARNING",
     "asyncio": "WARNING",
-    "semantic_kernel": "INFO",
+    "agent_framework": "INFO",
     "httpx": "WARNING",
     "fastapi": "INFO",
 }

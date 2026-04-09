@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends
 from utils.logging_config import get_logger
 from models.api_responses import ActionResponse
 from models.agent_request import (
@@ -7,7 +7,6 @@ from models.agent_request import (
     TheftReportRequest,
 )
 from agents.agent_manager import AgentManager
-from agents.safety_emergency_agent import SafetyEmergencyPlugin
 
 logger = get_logger(__name__)
 router = APIRouter(
@@ -15,7 +14,6 @@ router = APIRouter(
 )
 
 
-# Remove invalid import of non-existent singleton; use per-request dependency
 async def _get_agent_manager() -> AgentManager:
     return AgentManager()
 
@@ -24,7 +22,6 @@ async def _get_agent_manager() -> AgentManager:
 async def emergency_call(
     vehicle_id: str,
     request: EmergencyCallRequest,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
     agent_manager=Depends(_get_agent_manager),
 ):
     """Initiate an emergency call"""
@@ -36,31 +33,18 @@ async def emergency_call(
             "emergency_type": request.emergency_type,
             "agent_type": "safety_emergency",
         }
-
-        if direct_api_call:
-            plugin = SafetyEmergencyPlugin()
-            plugin_resp = await plugin._handle_emergency_call(
-                vehicle_id=vehicle_id,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
         response = await agent_manager.process_request(
             f"I need to make an emergency call for {request.emergency_type} emergency",
             context,
         )
-
         if not response.get("success", False):
             raise HTTPException(
                 status_code=400,
                 detail=response.get("response", "Failed to initiate emergency call"),
             )
-
         return ActionResponse(data=response)
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error initiating emergency call for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -70,7 +54,6 @@ async def emergency_call(
 async def report_collision(
     vehicle_id: str,
     request: CollisionReportRequest,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
     agent_manager=Depends(_get_agent_manager),
 ):
     """Report a collision incident"""
@@ -83,30 +66,17 @@ async def report_collision(
             "collision_location": request.location,
             "agent_type": "safety_emergency",
         }
-
-        if direct_api_call:
-            plugin = SafetyEmergencyPlugin()
-            plugin_resp = await plugin._handle_collision_alert(
-                vehicle_id=vehicle_id,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
         response = await agent_manager.process_request(
             f"I need to report a {request.severity} collision", context
         )
-
         if not response.get("success", False):
             raise HTTPException(
                 status_code=400,
                 detail=response.get("response", "Failed to report collision"),
             )
-
         return ActionResponse(data=response)
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error reporting collision for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -116,7 +86,6 @@ async def report_collision(
 async def report_theft(
     vehicle_id: str,
     request: TheftReportRequest,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
     agent_manager=Depends(_get_agent_manager),
 ):
     """Report vehicle theft"""
@@ -129,31 +98,18 @@ async def report_theft(
             "last_location": request.last_seen_location,
             "agent_type": "safety_emergency",
         }
-
-        if direct_api_call:
-            plugin = SafetyEmergencyPlugin()
-            plugin_resp = await plugin._handle_theft_notification(
-                vehicle_id=vehicle_id,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
         response = await agent_manager.process_request(
             f"I need to report my vehicle as stolen. {request.description or ''}",
             context,
         )
-
         if not response.get("success", False):
             raise HTTPException(
                 status_code=400,
                 detail=response.get("response", "Failed to report theft"),
             )
-
         return ActionResponse(data=response)
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error reporting theft for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -162,8 +118,7 @@ async def report_theft(
 @router.post("/sos", response_model=ActionResponse)
 async def activate_sos(
     vehicle_id: str,
-    direct_api_call: bool = Query(True, alias="direct_api_call"),
-    agent_manager=Depends(_get_agent_manager)
+    agent_manager=Depends(_get_agent_manager),
 ):
     """Activate SOS emergency response"""
     try:
@@ -173,30 +128,17 @@ async def activate_sos(
             "session_id": f"sos_{vehicle_id}",
             "agent_type": "safety_emergency",
         }
-
-        if direct_api_call:
-            plugin = SafetyEmergencyPlugin()
-            plugin_resp = await plugin._handle_sos(
-                vehicle_id=vehicle_id,
-                call_context=context,
-            )
-            return ActionResponse(
-                message=plugin_resp.get("message"),
-                data=plugin_resp.get("data"),
-                success=plugin_resp.get("success", True),
-            )
         response = await agent_manager.process_request(
             "EMERGENCY SOS - I need immediate help", context
         )
-
         if not response.get("success", False):
             raise HTTPException(
                 status_code=400,
                 detail=response.get("response", "Failed to activate SOS"),
             )
-
         return ActionResponse(data=response)
-
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error activating SOS for vehicle {vehicle_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")

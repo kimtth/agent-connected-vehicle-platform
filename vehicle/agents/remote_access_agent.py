@@ -1,268 +1,187 @@
 import datetime
 import uuid
-import json
-from typing import Dict, Any, Optional, Annotated
+from typing import Dict, Any, Annotated
+
+from agent_framework import tool
 from azure.cosmos_db import get_cosmos_client
-from utils.agent_context import validate_command
-from semantic_kernel.functions import kernel_function
-from semantic_kernel.agents import ChatCompletionAgent
-from plugin.oai_service import create_chat_service
 from utils.logging_config import get_logger
-from agents.base.base_agent import BasePlugin
-from utils.agent_context import extract_vehicle_id
 from utils.vehicle_object_utils import find_vehicle
-from models.command import Command  # NEW: use Pydantic model for camelCase serialization
+from agents.base.base_agent import format_tool_response
+from models.command import Command
+from pydantic import Field
 
 logger = get_logger(__name__)
 
+_PLUGIN = "RemoteAccessPlugin"
 
-class RemoteAccessAgent:
-    """
-    Remote Access Agent for handling vehicle remote control operations.
-    """
 
-    def __init__(self):
-        """Initialize the Remote Access Agent."""
-        # Get the singleton cosmos client instance
-        self.cosmos_client = get_cosmos_client()
-        service_factory = create_chat_service()
-        self.agent = ChatCompletionAgent(
-            service=service_factory,
-            name="RemoteAccessAgent",
-            instructions=(
-                "You specialize in remote vehicle operations like locking/unlocking doors, "
-                "starting engines, and controlling lights. "
-                "IMPORTANT: Return the EXACT JSON response from your plugin functions without modification."
-            ),
-            plugins=[RemoteAccessPlugin()],
+async def _apply_status_update(cosmos_client, vehicle_id: str, patch: Dict[str, Any]):
+    try:
+        current = await cosmos_client.get_vehicle_status(vehicle_id) or {}
+        if not isinstance(current, dict):
+            try:
+                current = current.model_dump()
+            except Exception:
+                current = {}
+        current.update(patch)
+        if hasattr(cosmos_client, "update_vehicle_status"):
+            await cosmos_client.update_vehicle_status(vehicle_id, current)
+        elif hasattr(cosmos_client, "set_vehicle_status"):
+            await cosmos_client.set_vehicle_status(vehicle_id, current)
+        else:
+            container = getattr(cosmos_client, "status_container", None)
+            if container:
+                await container.upsert_item({"id": vehicle_id, "vehicle_id": vehicle_id, **current})
+    except Exception as e:
+        logger.debug(f"Status update skipped ({vehicle_id}): {e}")
+
+
+@tool(name="handle_door_lock", description="Handle a door lock/unlock request.", approval_mode="never_require")
+async def handle_door_lock(
+    vehicle_id: Annotated[str, Field(description="Vehicle GUID to lock/unlock")] = "",
+    lock: Annotated[bool, Field(description="True to lock, False to unlock")] = True,
+) -> str:
+    cosmos_client = get_cosmos_client()
+    action = "lock" if lock else "unlock"
+    if not vehicle_id:
+        return format_tool_response("Please specify which vehicle you'd like to control.", success=False, plugin_name=_PLUGIN)
+
+    try:
+        await cosmos_client.ensure_connected()
+        vehicles = await cosmos_client.list_vehicles()
+        vehicle = find_vehicle(vehicles, vehicle_id)
+        if not vehicle:
+            return format_tool_response(f"Vehicle with ID {vehicle_id} not found.", success=False, plugin_name=_PLUGIN)
+
+        command_type = "lock_doors" if lock else "unlock_doors"
+        command_id = f"remote_access_{action}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+        command_obj = Command(
+            id=str(uuid.uuid4()),
+            command_id=command_id,
+            vehicle_id=vehicle_id,
+            command_type=command_type.lower(),
+            parameters={"doors": "all"},
+            status="sent",
+            timestamp=datetime.datetime.now().isoformat(),
+            priority="normal",
+        )
+        await cosmos_client.create_command(command_obj.model_dump(by_alias=True))
+
+        await _apply_status_update(cosmos_client, vehicle_id, {
+            "doorsLocked": lock,
+            "doorsUpdatedAt": datetime.datetime.now().isoformat(),
+            "lastDoorCommandId": command_id,
+        })
+        return format_tool_response(
+            f"I've {action}ed your vehicle doors.",
+            data={"action": f"door_{action}", "vehicleId": vehicle_id, "commandId": command_id},
+            function_name="handle_door_lock", plugin_name=_PLUGIN,
+        )
+    except Exception as e:
+        logger.error(f"Error handling door lock request: {e}")
+        return format_tool_response(
+            f"I encountered an error while trying to {action} the doors. Please try again.",
+            success=False, function_name="handle_door_lock", plugin_name=_PLUGIN,
         )
 
-class RemoteAccessPlugin(BasePlugin):
-    """Plugin for remote access operations."""
 
-    def __init__(self):
-        # Get the singleton cosmos client instance
-        self.cosmos_client = get_cosmos_client()
+@tool(name="handle_engine_control", description="Handle remote engine start/stop request.", approval_mode="never_require")
+async def handle_engine_control(
+    vehicle_id: Annotated[str, Field(description="Vehicle GUID to start/stop engine")] = "",
+    start: Annotated[bool, Field(description="True to start engine, False to stop")] = True,
+) -> str:
+    cosmos_client = get_cosmos_client()
+    action = "start" if start else "stop"
+    if not vehicle_id:
+        return format_tool_response(
+            "Please specify which vehicle you'd like to control the engine for.",
+            success=False, plugin_name=_PLUGIN,
+        )
 
-    async def _apply_status_update(self, vehicle_id: str, patch: Dict[str, Any]):
-        try:
-            current = await self.cosmos_client.get_vehicle_status(vehicle_id) or {}
-            if not isinstance(current, dict):
-                try:
-                    current = current.model_dump()
-                except Exception:
-                    current = {}
-            current.update(patch)
-            if hasattr(self.cosmos_client, "update_vehicle_status"):
-                await self.cosmos_client.update_vehicle_status(vehicle_id, current)
-            elif hasattr(self.cosmos_client, "set_vehicle_status"):
-                await self.cosmos_client.set_vehicle_status(vehicle_id, current)
-            else:
-                container = getattr(self.cosmos_client, "status_container", None)
-                if container:
-                    await container.upsert_item({"id": vehicle_id, "vehicle_id": vehicle_id, **current})
-        except Exception as e:
-            logger.debug(f"Status update skipped ({vehicle_id}): {e}")
+    try:
+        await cosmos_client.ensure_connected()
+        vehicles = await cosmos_client.list_vehicles()
+        vehicle = find_vehicle(vehicles, vehicle_id)
+        if not vehicle:
+            return format_tool_response(f"Vehicle with ID {vehicle_id} not found.", success=False, plugin_name=_PLUGIN)
 
-    @kernel_function(description="Handle a door lock/unlock request.")
-    async def _handle_door_lock(
-        self,
-        vehicle_id: Annotated[str, "Vehicle GUID to lock/unlock"] = "",
-        lock: Annotated[bool, "True to lock, False to unlock"] = True,
-        call_context: Annotated[Dict[str, Any], "Invocation context"] = {},
-        **kwargs
-    ) -> Dict[str, Any]:
-        vid = extract_vehicle_id(call_context, vehicle_id or None)
-        action = "lock" if lock else "unlock"
-        if not vid:
-            return self._format_response(
-                "Please specify which vehicle you'd like to control.", success=False
-            )
+        command_type = "start_engine" if start else "stop_engine"
+        command_id = f"engine_{action}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
 
-        try:
-            # Ensure Cosmos DB connection
-            await self.cosmos_client.ensure_connected()
+        command_obj = Command(
+            id=str(uuid.uuid4()),
+            command_id=command_id,
+            vehicle_id=vehicle_id,
+            command_type=command_type.lower(),
+            parameters={"remote": True},
+            status="sent",
+            timestamp=datetime.datetime.now().isoformat(),
+            priority="high",
+        )
+        await cosmos_client.create_command(command_obj.model_dump(by_alias=True))
 
-            # Check if vehicle exists
-            vehicles = await self.cosmos_client.list_vehicles()
-            vehicle = find_vehicle(vehicles, vid)
-            if not vehicle:
-                return self._format_response(
-                    f"Vehicle with ID {vid} not found.", success=False
-                )
+        await _apply_status_update(cosmos_client, vehicle_id, {
+            "engineRunning": start,
+            "engineUpdatedAt": datetime.datetime.now().isoformat(),
+            "lastEngineCommandId": command_id,
+        })
+        verb = "stopped" if action == "stop" else f"{action}ed"
+        return format_tool_response(
+            f"I've {verb} your vehicle engine remotely.",
+            data={"action": f"engine_{action}", "vehicleId": vehicle_id, "commandId": command_id},
+            function_name="handle_engine_control", plugin_name=_PLUGIN,
+        )
+    except Exception:
+        return format_tool_response(
+            f"I encountered an error while trying to {action} the engine. Please try again.",
+            success=False, function_name="handle_engine_control", plugin_name=_PLUGIN,
+        )
 
-            # Validate the command
-            command_type = "lock_doors" if lock else "unlock_doors"
-            command_id = f"remote_access_{action}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
 
-            # Create the command in Cosmos DB via model
-            command_obj = Command(
-                id=str(uuid.uuid4()),
-                command_id=command_id,
-                vehicle_id=vid,
-                command_type=command_type.lower(),
-                parameters={"doors": "all"},
-                status="sent",
-                timestamp=datetime.datetime.now().isoformat(),
-                priority="normal",
-            )
-            await self.cosmos_client.create_command(command_obj.model_dump(by_alias=True))
+@tool(name="handle_horn_lights", description="Handle horn and lights activation to locate vehicle.", approval_mode="never_require")
+async def handle_horn_lights(
+    vehicle_id: Annotated[str, Field(description="Vehicle GUID to activate horn/lights")] = "",
+) -> str:
+    cosmos_client = get_cosmos_client()
+    if not vehicle_id:
+        return format_tool_response("vehicle_id is required", success=False, plugin_name=_PLUGIN)
 
-            await self._apply_status_update(
-                vid,
-                {
-                    "doorsLocked": lock,
-                    "doorsUpdatedAt": datetime.datetime.now().isoformat(),
-                    "lastDoorCommandId": command_id,
-                },
-            )
-            return self._format_response(
-                f"I've {action}ed your vehicle doors.",
-                data={"action": f"door_{action}", "vehicleId": vid, "commandId": command_id},
-                function_name="_handle_door_lock",
-            )
-        except Exception as e:
-            logger.error(f"Error handling door lock request: {e}")
-            return self._format_response(
-                f"I encountered an error while trying to {action} the doors. Please try again.",
-                success=False,
-                function_name="_handle_door_lock",
-            )
+    try:
+        await cosmos_client.ensure_connected()
+        command_id = f"horn_lights_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
 
-    @kernel_function(description="Handle remote engine start/stop request.")
-    async def _handle_engine_control(
-        self,
-        vehicle_id: Annotated[str, "Vehicle GUID to start/stop engine"] = "",
-        start: Annotated[bool, "True to start engine, False to stop"] = True,
-        call_context: Annotated[Dict[str, Any], "Invocation context"] = {},
-        **kwargs
-    ) -> Dict[str, Any]:
-        vid = extract_vehicle_id(call_context, vehicle_id or None)
-        action = "start" if start else "stop"
-        if not vid:
-            return self._format_response(
-                "Please specify which vehicle you'd like to control the engine for.",
-                success=False,
-            )
+        command_obj = Command(
+            id=str(uuid.uuid4()),
+            command_id=command_id,
+            vehicle_id=vehicle_id,
+            command_type="horn_lights",
+            parameters={"duration": 10},
+            status="sent",
+            timestamp=datetime.datetime.now().isoformat(),
+            priority="normal",
+        )
+        await cosmos_client.create_command(command_obj.model_dump(by_alias=True))
 
-        try:
-            await self.cosmos_client.ensure_connected()
+        await _apply_status_update(cosmos_client, vehicle_id, {
+            "locateMode": {
+                "active": True,
+                "durationSec": 10,
+                "activatedAt": datetime.datetime.now().isoformat(),
+                "commandId": command_id,
+            }
+        })
+        return format_tool_response(
+            "I've activated the horn and lights to help you locate your vehicle.",
+            data={"action": "HORN_LIGHTS", "vehicleId": vehicle_id, "commandId": command_id},
+            function_name="handle_horn_lights", plugin_name=_PLUGIN,
+        )
+    except Exception as e:
+        logger.error(f"Error activating horn and lights: {e}")
+        return format_tool_response(
+            "I encountered an error while activating horn and lights. Please try again.",
+            success=False, function_name="handle_horn_lights", plugin_name=_PLUGIN,
+        )
 
-            # Check if vehicle exists
-            vehicles = await self.cosmos_client.list_vehicles()
-            vehicle = find_vehicle(vehicles, vid)
-            if not vehicle:
-                return self._format_response(
-                    f"Vehicle with ID {vid} not found.", success=False
-                )
 
-            command_type = "start_engine" if start else "stop_engine"
-            command_id = (
-                f"engine_{action}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-            )
-
-            command_obj = Command(
-                id=str(uuid.uuid4()),
-                command_id=command_id,
-                vehicle_id=vid,
-                command_type=command_type.lower(),
-                parameters={"remote": True},
-                status="sent",
-                timestamp=datetime.datetime.now().isoformat(),
-                priority="high",
-            )
-            await self.cosmos_client.create_command(command_obj.model_dump(by_alias=True))
-
-            await self._apply_status_update(
-                vid,
-                {
-                    "engineRunning": start,
-                    "engineUpdatedAt": datetime.datetime.now().isoformat(),
-                    "lastEngineCommandId": command_id,
-                },
-            )
-            verb = "stopped" if action == "stop" else f"{action}ed"
-            return self._format_response(
-                f"I've {verb} your vehicle engine remotely.",
-                data={"action": f"engine_{action}", "vehicleId": vid, "commandId": command_id},
-                function_name="_handle_engine_control",
-            )
-        except Exception as e:
-            return self._format_response(
-                f"I encountered an error while trying to {action} the engine. Please try again.",
-                success=False,
-                function_name="_handle_engine_control",
-            )
-
-    @kernel_function(description="Handle horn and lights activation.")
-    async def _handle_horn_lights(
-        self,
-        vehicle_id: Annotated[str, "Vehicle GUID to activate horn/lights"] = "",
-        action: Annotated[str, "Horn/lights action (e.g., locate)"] = "locate",
-        **kwargs
-    ) -> Dict[str, Any]:
-        vid = extract_vehicle_id(None, vehicle_id or None)
-
-        if not vid:
-            return self._format_response("vehicle_id is required", success=False)
-
-        try:
-            await self.cosmos_client.ensure_connected()
-
-            command_id = (
-                f"horn_lights_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-            )
-
-            command_obj = Command(
-                id=str(uuid.uuid4()),
-                command_id=command_id,
-                vehicle_id=vid,
-                command_type="horn_lights",
-                parameters={"duration": 10},
-                status="sent",
-                timestamp=datetime.datetime.now().isoformat(),
-                priority="normal",
-            )
-            await self.cosmos_client.create_command(command_obj.model_dump(by_alias=True))
-
-            await self._apply_status_update(
-                vid,
-                {
-                    "locateMode": {
-                        "active": True,
-                        "durationSec": 10,
-                        "activatedAt": datetime.datetime.now().isoformat(),
-                        "commandId": command_id,
-                    }
-                },
-            )
-            return self._format_response(
-                "I've activated the horn and lights to help you locate your vehicle.",
-                data={"action": "HORN_LIGHTS", "vehicleId": vid, "commandId": command_id},
-                function_name="_handle_horn_lights",
-            )
-        except Exception as e:
-            logger.error(f"Error activating horn and lights: {e}")
-            return self._format_response(
-                "I encountered an error while activating horn and lights. Please try again.",
-                success=False,
-                function_name="_handle_horn_lights",
-            )
-
-    def _format_response(
-        self,
-        message: str,
-        success: bool = True,
-        data: Optional[Dict[str, Any]] = None,
-        function_name: str = "",
-    ) -> str:  # Changed from Dict to str
-        """Return JSON string to preserve structure through SK's LLM layer."""
-        resp = {
-            "message": message,
-            "success": success,
-            "plugins_used": [f"{self.__class__.__name__}.{function_name}"] if function_name else [self.__class__.__name__],
-        }
-        if data:
-            resp["data"] = data
-        return json.dumps(resp)  # Return JSON string instead of dict
-
+REMOTE_ACCESS_TOOLS = [handle_door_lock, handle_engine_control, handle_horn_lights]

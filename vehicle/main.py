@@ -6,7 +6,6 @@ import sys
 import os
 import asyncio
 import logging
-import uuid
 import json
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -16,7 +15,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
 import socket
-import http.client  # added for health probing
+import http.client
 import multiprocessing
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,13 +35,12 @@ from models.api_responses import (
     HealthServices,
     CommandHistoryItem,
     CommandSubmitResponse,
-    Notification,
     CreateNotificationResponse,
     MarkNotificationReadResponse,
     GenericDetailResponse,
     FleetMetrics,
 )
-from models.notification import Notification as NotificationModel
+from models.notification import Notification
 from dotenv import load_dotenv
 from importlib import import_module
 from azure.azure_auth import AzureADMiddleware
@@ -64,21 +62,10 @@ sys.path.insert(0, str(project_root))
 # Load environment variables first
 load_dotenv(override=True)
 
-# Configure logging with single instance check
+# Configure logging
 log_level = os.getenv("LOG_LEVEL", "INFO")
-logging.basicConfig(
-    level=getattr(logging, log_level.upper(), logging.INFO),
-    format="%(asctime)s | %(levelname)s | %(name)s:%(funcName)s:%(lineno)d - %(message)s",
-    force=True,  # Override any existing logging configuration
-)
-
-logger = logging.getLogger(__name__)
-
-# Prevent duplicate logging from uvicorn
-logging.getLogger("uvicorn.access").disabled = True
-logging.getLogger("uvicorn").setLevel(logging.WARNING)
-
 configure_logging(log_level)
+logger = logging.getLogger(__name__)
 
 # Track MCP processes for graceful shutdown
 MCP_PROCESSES = []
@@ -239,7 +226,7 @@ async def get_vehicle_command_history(vehicle_id: str):
 async def submit_command(command: Command, background_tasks: BackgroundTasks):
     client = get_cosmos_client()
     await client.ensure_connected()
-    command_id = str(uuid.uuid4())
+    command_id = str(uuid4())
     command.command_id = command_id
     command.status = "pending"
     command.timestamp = datetime.now(timezone.utc).isoformat()
@@ -404,7 +391,7 @@ async def add_service(vehicle_id: str, service: Service):
     service_data = service.model_dump()
     # FIX: use camelCase partition key field expected by Cosmos (vehicleId), not snake_case
     service_data["vehicleId"] = vehicle_id
-    service_data["id"] = str(uuid.uuid4())
+    service_data["id"] = str(uuid4())
     return await client.create_service(service_data)
 
 
@@ -484,8 +471,8 @@ async def process_command_async(command_data):
         },
     )
     commandType = command_data.get("commandType") or command_data.get("command_type") or "unknown"
-    notif = NotificationModel(
-        id=str(uuid.uuid4()),
+    notif = Notification(
+        id=str(uuid4()),
         vehicle_id=vehicle_id,
         type="command_executed",
         message=f"Command {commandType} executed successfully.",

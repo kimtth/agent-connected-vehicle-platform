@@ -22,8 +22,8 @@ Backend (Python / FastAPI) lives in `vehicle/` and is the system of record + age
 - Routers: `vehicle/apis/*.py` grouped by domain (agents, vehicle features, remote access, emergency/safety, speech, dev seed). Loaded dynamically in `lifespan()`; missing modules are tolerated (log a warning, continue startup).
 - Data access: `vehicle/azure/cosmos_db.py` – async singleton (`get_cosmos_client()`) with resilient connect / retry, container auto-provisioning, polling-based status subscription (no change feed listener yet), camelCase storage via Pydantic models.
 - Auth: `vehicle/azure/azure_auth.py` – middleware validating Azure AD JWT if configured; supports optional mode. Accepts both raw GUID and `api://GUID` audiences, plus multiple acquisition channels (headers, query, cookies, DEV_BEARER_TOKEN env). Certain dev endpoints bypass auth.
-- Agents: `vehicle/agents/*` – Semantic Kernel `ChatCompletionAgent`s orchestrated by `AgentManager` (`agent_manager.py`). Manager aggregates domain agents + a general plugin (`plugin/sk_plugin.py`) and provides streaming + fallback logic.
-- Plugins / AI service factory: `vehicle/plugin/oai_service.py` chooses Azure OpenAI first (env: `AZURE_OPENAI_API_KEY`) else OpenAI.
+- Agents: `vehicle/agents/*` – Microsoft Agent Framework `Agent` instances orchestrated by `AgentManager` (`agent_manager.py`). Manager aggregates domain agent tools (decorated with `@tool`) + general tools (`plugin/general_tools.py`) into a single coordinating agent and provides streaming + fallback logic.
+- Plugins / AI client factory: `vehicle/plugin/oai_service.py` returns an `OpenAIChatClient` from `agent-framework-openai` which auto-detects Azure OpenAI (managed identity or API key) vs OpenAI from environment variables.
 - Models: `vehicle/models/*.py` – All inherit from `CamelModel` which enforces outbound camelCase and accepts inbound snake_case or camelCase.
 - Frontend (React) in `web/` (not deeply coupled—consumes REST + SSE `/api/vehicle/{id}/status/stream` and agent endpoints `/api/agent/*`).
 - Dev seed + mock data: `vehicle/apis/dev_seed_routes.py` (creates demo vehicles/status) and MCP mock servers under `vehicle/plugin/mcp_*` (started as subprocesses when `ENABLE_MCP=true`).
@@ -40,9 +40,9 @@ Backend (Python / FastAPI) lives in `vehicle/` and is the system of record + age
 - Agent streaming: `agent_routes.ask_agent(stream=true)` uses `process_request_stream`; chunk model is `StreamingChunk` (camelCase). Maintain chunk shape for frontend compatibility.
 
 ## 4. Agent Orchestration Patterns
-- `AgentManager.process_request()` builds a synthetic prompt: `Query: ...\nContext: {json}`. If adding new context keys, ensure they are JSON-serializable (or provide `default=str`).
-- To add a new specialized agent: create class mirroring existing agent files (pattern: wraps SK plugins), instantiate in `_initialize_domain_agents`, add to `plugins` list in `_initialize_manager_agent`, and update `agent_type_mapping` in `apis/agent_routes.py` if a new public route form is exposed.
-- Fallback path (`_process_with_fallback`) uses a simpler manager without enforced JSON response schema—keep this lightweight; avoid coupling to new heavy plugins.
+- `AgentManager.process_request()` builds a synthetic prompt: `Query: ...\nContext: {json}`. The single coordinating `Agent` has all domain tools registered; the LLM selects which tool to invoke via function calling.
+- To add a new specialized agent: create a module under `vehicle/agents/` with `@tool`-decorated async functions (matching existing patterns), export a `*_TOOLS` list, import and concatenate the tools in `agent_manager.py._all_tools`. If a new public route form is exposed, update `agent_type_mapping` in `apis/agent_routes.py`.
+- Fallback path (`_process_with_fallback`) creates a fresh `Agent` instance—keep this lightweight; avoid coupling to new heavy tools.
 
 ## 5. Azure Integration Nuances
 - Auth optional by default; enforce by setting `AZURE_AUTH_REQUIRED=true`. When adding routes that must stay open for local dev, append to `exclude_prefixes` or `exclude_exact` cautiously.
@@ -51,15 +51,15 @@ Backend (Python / FastAPI) lives in `vehicle/` and is the system of record + age
 ## 6. Environment & Startup
 Essential env vars (see `.env.sample` referenced in README):
 - API: `API_HOST`, `API_PORT`, `ENABLE_MCP`
-- Cosmos: `COSMOS_DB_ENDPOINT`, `COSMOS_DB_KEY` or `COSMOS_DB_USE_AAD=true`, container names (optional overrides)
+- Cosmos: `COSMOS_DB_ENDPOINT`, `COSMOS_DB_KEY` or `COSMOS_DB_USE_AAD=true`
 - Auth: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_AUTH_REQUIRED`
-- AI: `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_DEPLOYMENT_NAME` + `AZURE_OPENAI_ENDPOINT` or `OPENAI_API_KEY` + `OPENAI_CHAT_MODEL_NAME`
+- AI: `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_MODEL` (managed identity) or `AZURE_OPENAI_API_KEY` (key auth) or `OPENAI_API_KEY` + `OPENAI_MODEL`
 - Logging: `LOG_LEVEL`
 
 Run backend locally:
 ```
 cd vehicle
-poetry install
+uv sync
 python main.py
 ```
 (Ensure `az login` first if using AAD Cosmos.)
@@ -87,10 +87,10 @@ python main.py
 ## 11. Quick Reference: Key Files
 - `vehicle/main.py` – server lifecycle, routes inclusion, SSE, MCP subprocess management.
 - `vehicle/azure/cosmos_db.py` – data layer & polling subscription.
-- `vehicle/agents/agent_manager.py` – orchestration of Semantic Kernel agents.
+- `vehicle/agents/agent_manager.py` – orchestration via Microsoft Agent Framework `Agent` with all domain tools.
 - `vehicle/apis/agent_routes.py` – agent HTTP interface (+ streaming).
 - `vehicle/models/base.py` – camelCase model contract.
-- `vehicle/plugin/oai_service.py` – AI provider selection.
+- `vehicle/plugin/oai_service.py` – AI provider selection (OpenAIChatClient from agent-framework-openai).
 
 ---
 If any convention above seems ambiguous (e.g., adding a new agent type or status field), ask for clarification before large refactors.
