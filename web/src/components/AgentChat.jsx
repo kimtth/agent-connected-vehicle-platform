@@ -30,6 +30,7 @@ import {
 import { streamAgent } from '../api/chat';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { MessageCircle } from 'lucide-react';
 
 // Define available agents with their details
 const AVAILABLE_AGENTS = [
@@ -391,9 +392,14 @@ const AgentChat = ({ vehicleId }) => {
             </div>
           )}
           {message.streaming && (
-            <p className="text-xs text-muted-foreground mt-2">
-              Streaming...
-            </p>
+            <div className="flex items-center gap-1.5 mt-2">
+              <div className="flex gap-1">
+                <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              </div>
+              <span className="text-[10px] text-muted-foreground">typing</span>
+            </div>
           )}
         </div>
       </div>
@@ -403,10 +409,20 @@ const AgentChat = ({ vehicleId }) => {
 
   return (
     <div className="flex flex-col h-full p-5" style={{ minHeight: '520px' }}>
-      <h1 className="text-xl font-semibold mb-3">
-        Connected Vehicle Agent Chat
-        {vehicleId ? ` - Vehicle: ${vehicleId}` : ' - No vehicle selected'}
-      </h1>
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h1 className="text-xl font-semibold">Agent Chat</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {vehicleId ? `Vehicle: ${vehicleId.substring(0, 8)}...` : 'No vehicle selected'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+            <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+            Connected
+          </span>
+        </div>
+      </div>
       
       <div className="flex gap-1.5 items-center mb-2">
         <div className="relative flex-1">
@@ -447,9 +463,17 @@ const AgentChat = ({ vehicleId }) => {
               {chatHistory.length > 0 ? (
                 renderedChatHistory
               ) : (
-                <p className="text-xs text-muted-foreground text-center w-full mt-6">
-                  No messages yet. Start a conversation with the {selectedAgent.title} agent.
-                </p>
+                <div className="flex flex-col items-center justify-center h-full py-12 px-4">
+                  <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                    <MessageCircle className="h-8 w-8 text-primary/60" />
+                  </div>
+                  <p className="text-sm font-medium text-foreground/80 mb-1">
+                    Start a conversation
+                  </p>
+                  <p className="text-xs text-muted-foreground text-center max-w-[280px]">
+                    Ask the {selectedAgent.title} anything about your vehicle, or try a quick action from the sidebar.
+                  </p>
+                </div>
               )}
               <div ref={messagesEndRef} />
             </div>

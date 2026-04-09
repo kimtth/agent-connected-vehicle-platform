@@ -15,11 +15,11 @@ An AI agent-driven car management system: control, diagnostics, and insights via
 - 🔔 Real-time alerts with notifications
 
 ## 🛠️ Tech Stack
-- Backend: Python 3.12+, FastAPI, Semantic Kernel
+- Backend: Python 3.13+, FastAPI, Microsoft Agent Framework (`agent-framework`, `agent-framework-openai`)
 - DB: Azure Cosmos DB (AAD auth)
-- AI: Azure OpenAI (fallback to OpenAI if configured)
-- Frontend: React
-- MCP: Weather, Traffic, POI, Navigation via FastMCP (sample data in plugin/sample_data.py)
+- AI: Azure OpenAI (managed identity) / OpenAI
+- Frontend: React, Tailwind CSS
+- MCP: Weather, Traffic, POI, Navigation via FastMCP (sample data in plugin/mcp_mock_data.py)
 
 > Full architecture, agent specs, and API list: see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -39,7 +39,7 @@ cd web
 # Copy example env files and edit values before running
 cp .env.example .env.development
 cp .env.example .env.production
-yarn install
+pnpm install
 
 # --- Backend / Vehicle service ---
 cd ../vehicle
@@ -50,7 +50,7 @@ poetry install
 # --- Run services (use two terminals) ---
 # Terminal A: start frontend
 cd ../web
-yarn start
+pnpm start
 
 # Terminal B: start backend
 cd ../vehicle
@@ -60,7 +60,7 @@ python main.py
 ## 🐳 Docker Deployment
 
 > [!TIP]   
-> This Dockerfile does not support accessing Cosmos DB using a managed identity; it only works with Cosmos DB key authentication.
+> The Dockerfile uses `uv` for Python dependency management and `pnpm` for frontend builds.
 
 ```bash
 # 1. Copy and configure environment
@@ -102,7 +102,7 @@ az webapp config set --resource-group <resource-group-name> --name <app-name> --
 ```
 
 Note: 
-MCP services use deterministic sample data in plugin/sample_data.py.
+MCP services use deterministic sample data in plugin/mcp_mock_data.py.
 
 ## 📖 Documentation
 For full API reference, architecture, and examples, see the project documentation.

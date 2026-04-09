@@ -1,6 +1,5 @@
 from models.base import BaseSchemaModel
 from typing import List, Union, Optional
-from semantic_kernel.contents import ChatMessageContent
 
 
 class AskAIRequest(BaseSchemaModel):
@@ -10,15 +9,16 @@ class AskAIRequest(BaseSchemaModel):
     temperature: float = 0.7
     maxTokens: int = 512
 
-    def normalized_messages(self) -> List[ChatMessageContent]:
+    def normalized_messages_text(self) -> str:
+        """Flatten messages into a single prompt string for Agent Framework."""
         if not self.messages:
-            return []
+            return ""
         raw = self.messages if isinstance(self.messages, list) else [self.messages]
 
-        norm = []
+        parts: List[str] = []
         for item in raw:
             if isinstance(item, dict) and item.get("content"):
-                norm.append(ChatMessageContent(role=item.get("role", "user"), content=str(item["content"])))
+                parts.append(str(item["content"]).strip())
             elif isinstance(item, str) and item.strip():
-                norm.append(ChatMessageContent(role="user", content=item.strip()))
-        return norm
+                parts.append(item.strip())
+        return "\n".join(parts)

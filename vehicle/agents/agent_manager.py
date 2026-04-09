@@ -1,21 +1,18 @@
 from typing import Dict, Any, Optional, AsyncGenerator, List
-import asyncio
 import json
-from contextlib import asynccontextmanager
-from semantic_kernel.agents import ChatCompletionAgent, ChatHistoryAgentThread
-from semantic_kernel.functions.kernel_arguments import KernelArguments
-from semantic_kernel.filters import FunctionInvocationContext
+
+from agent_framework import Agent
 from azure.cosmos_db import get_cosmos_client
 
-from agents.alerts_notifications_agent import AlertsNotificationsAgent
-from agents.charging_energy_agent import ChargingEnergyAgent
-from agents.diagnostics_battery_agent import DiagnosticsBatteryAgent
-from agents.information_services_agent import InformationServicesAgent
-from agents.remote_access_agent import RemoteAccessAgent
-from agents.safety_emergency_agent import SafetyEmergencyAgent
-from agents.vehicle_feature_control_agent import VehicleFeatureControlAgent
-from plugin.oai_service import create_chat_service
-from plugin.sk_plugin import GeneralPlugin
+from agents.alerts_notifications_agent import ALERTS_NOTIFICATIONS_TOOLS
+from agents.charging_energy_agent import CHARGING_ENERGY_TOOLS
+from agents.diagnostics_battery_agent import DIAGNOSTICS_BATTERY_TOOLS
+from agents.information_services_agent import INFORMATION_SERVICES_TOOLS
+from agents.remote_access_agent import REMOTE_ACCESS_TOOLS
+from agents.safety_emergency_agent import SAFETY_EMERGENCY_TOOLS
+from agents.vehicle_feature_control_agent import VEHICLE_FEATURE_CONTROL_TOOLS
+from plugin.oai_service import create_chat_client
+from plugin.general_tools import GENERAL_TOOLS
 from utils.logging_config import get_logger
 from utils.vehicle_object_utils import ensure_dict
 from models.agent_response import (
@@ -29,62 +26,43 @@ logger = get_logger(__name__)
 
 class AgentManager:
     """
-    Vehicle AgentManager refactored to use Semantic Kernel style agents/plugins.
+    Vehicle AgentManager using Microsoft Agent Framework.
     Coordinates specialized agents for vehicle operations and provides a unified interface.
     """
 
     def __init__(self):
         self.cosmos_client = get_cosmos_client()
-        service_factory = create_chat_service()
-        self._initialize_domain_agents(service_factory)
-        self._initialize_manager_agent(service_factory)
-        self.thread: Optional[ChatHistoryAgentThread] = None
-
-    def _initialize_domain_agents(self, service_factory) -> None:
-        self.remote_access_agent = RemoteAccessAgent().agent
-        self.safety_agent = SafetyEmergencyAgent().agent
-        self.charging_agent = ChargingEnergyAgent().agent
-        self.info_services_agent = InformationServicesAgent().agent
-        self.feature_control_agent = VehicleFeatureControlAgent().agent
-        self.diagnostics_agent = DiagnosticsBatteryAgent().agent
-        self.alerts_agent = AlertsNotificationsAgent().agent
-        self.general_agent = ChatCompletionAgent(
-            service=service_factory,
-            name="GeneralAgent",
-            instructions="You handle general vehicle inquiries and provide helpful information.",
-            plugins=[GeneralPlugin()],
+        self._all_tools = (
+            REMOTE_ACCESS_TOOLS
+            + SAFETY_EMERGENCY_TOOLS
+            + CHARGING_ENERGY_TOOLS
+            + INFORMATION_SERVICES_TOOLS
+            + VEHICLE_FEATURE_CONTROL_TOOLS
+            + DIAGNOSTICS_BATTERY_TOOLS
+            + ALERTS_NOTIFICATIONS_TOOLS
+            + GENERAL_TOOLS
         )
-
-    def _initialize_manager_agent(self, service_factory) -> None:
-        self.manager = ChatCompletionAgent(
-            service=service_factory,
+        client = create_chat_client()
+        self.manager = Agent(
+            client=client,
             name="VehicleManagerAgent",
             instructions=(
-                "You are a vehicle management coordinator that routes requests to specialized agents. "
-                "Analyze the user's request and context to determine the appropriate agent. "
-                "Provide clear, helpful responses and indicate which plugins were used. "
+                "You are a vehicle management coordinator that routes requests to specialized tools. "
+                "Analyze the user's request and context to determine the appropriate tool. "
+                "Provide clear, helpful responses and indicate which tools were used. "
                 "Highlight keywords in the response. Be concise. "
                 "Output with markdown format."
             ),
-            plugins=[
-                self.remote_access_agent,
-                self.safety_agent,
-                self.charging_agent,
-                self.info_services_agent,
-                self.feature_control_agent,
-                self.diagnostics_agent,
-                self.alerts_agent,
-                self.general_agent,
-            ],
+            tools=self._all_tools,
         )
+        # Session for multi-turn conversations (keyed by session_id)
+        self._sessions: Dict[str, Any] = {}
 
-
-
-    async def _ensure_thread(self, session_id: str) -> None:
-        if not self.thread or getattr(self.thread, "_thread_id", None) != session_id:
-            if self.thread:
-                await self.thread.delete()
-            self.thread = ChatHistoryAgentThread(thread_id=session_id)
+    def _get_session(self, session_id: str):
+        """Get or create a session for multi-turn conversations."""
+        if session_id not in self._sessions:
+            self._sessions[session_id] = self.manager.create_session()
+        return self._sessions[session_id]
 
     async def _get_vehicle_data(self, vehicle_id: str) -> Optional[Dict[str, Any]]:
         if not vehicle_id:
@@ -107,9 +85,14 @@ class AgentManager:
             enriched_context["vehicleStatus"] = vehicle_status
         return enriched_context
 
-    def _parse_response_safely(self, response_content: str, plugins_used: Optional[List[str]] = None) -> ParsedAgentMessage:
-        content = response_content.content if hasattr(response_content, "content") else str(response_content)
-        content = content.strip()
+    def _parse_response_safely(self, response_content, plugins_used: Optional[List[str]] = None) -> ParsedAgentMessage:
+        if hasattr(response_content, "text"):
+            content = response_content.text
+        elif hasattr(response_content, "content"):
+            content = response_content.content
+        else:
+            content = str(response_content)
+        content = content.strip() if content else ""
         if content.startswith("{") and content.endswith("}"):
             try:
                 parsed = json.loads(content)
@@ -133,7 +116,6 @@ class AgentManager:
         fallback_used: bool = False,
         error: Optional[str] = None,
     ) -> AgentResponse:
-        """Convert a ParsedAgentMessage into the outward AgentResponse model."""
         return AgentResponse(
             response=parsed.message or "The command has been processed successfully.",
             success=parsed.status == "completed",
@@ -143,113 +125,56 @@ class AgentManager:
             error=error,
         )
 
-    async def _prepare_kernel_arguments(self, enriched_context: Dict[str, Any]) -> KernelArguments:
-        args = KernelArguments()
-        for key in ["vehicleId", "vehicleData", "vehicleStatus", "sessionId", "agentType", "query"]:
-            if key in enriched_context:
-                args[key.replace("Id", "_id").replace("Data", "_data").replace("Status", "_status").replace("Type", "_type")] = enriched_context[key]
-        args["call_context"] = enriched_context
-        return args
-
     async def process_request(self, query: str, context: Dict[str, Any]) -> Dict[str, Any]:
         session_id = context.get("session_id", "default")
         context["query"] = query
         enriched_context = await self._enrich_context(context)
-        await self._ensure_thread(session_id)
-        kernel_args = await self._prepare_kernel_arguments(enriched_context)
+        session = self._get_session(session_id)
+        prompt = f"Query: {query}\nContext: {json.dumps(enriched_context, default=str)}"
         try:
-            sk_response = await self.manager.get_response(
-                messages=f"Query: {query}\nContext: {json.dumps(enriched_context, default=str)}",
-                thread=self.thread,
-                arguments=kernel_args,
-            )
-            parsed = self._parse_response_safely(sk_response.message)
+            result = await self.manager.run(prompt, session=session)
+            parsed = self._parse_response_safely(result)
             return self._build_agent_response(parsed).model_dump(by_alias=True)
         except Exception:
             return await self._process_with_fallback(query, enriched_context)
 
     async def _process_with_fallback(self, query: str, enriched_context: Dict[str, Any]) -> Dict[str, Any]:
-        fallback_manager = ChatCompletionAgent(
-            service=create_chat_service(),
+        client = create_chat_client()
+        fallback_agent = Agent(
+            client=client,
             name="VehicleManagerFallback",
             instructions="You are a vehicle management coordinator. Analyze the user's request and provide a helpful response.",
-            plugins=[
-                self.remote_access_agent,
-                self.safety_agent,
-                self.charging_agent,
-                self.info_services_agent,
-                self.feature_control_agent,
-                self.diagnostics_agent,
-                self.alerts_agent,
-                self.general_agent,
-            ],
+            tools=self._all_tools,
         )
-        kernel_args = await self._prepare_kernel_arguments(enriched_context)
-        sk_response = await fallback_manager.get_response(
-            messages=f"Query: {query}\nContext: {json.dumps(enriched_context, default=str)}",
-            thread=self.thread,
-            arguments=kernel_args,
-        )
-        parsed = self._parse_response_safely(sk_response.message)
+        prompt = f"Query: {query}\nContext: {json.dumps(enriched_context, default=str)}"
+        result = await fallback_agent.run(prompt)
+        parsed = self._parse_response_safely(result)
         return self._build_agent_response(parsed, fallback_used=True).model_dump(by_alias=True)
 
-    def _extract_candidate_text(self, chunk) -> str:
-        """Return a single best textual candidate from a streaming chunk."""
-        try:
-            if chunk is None:
-                return ""
-            if isinstance(chunk, str):
-                return chunk
-            for attr in ("message", "content", "text"):
-                val = getattr(chunk, attr, None)
-                if isinstance(val, str):
-                    return val
-                if isinstance(val, (list, tuple)):
-                    parts = []
-                    for p in val:
-                        if isinstance(p, str):
-                            parts.append(p)
-                        else:
-                            t = getattr(p, "text", None)
-                            if isinstance(t, str):
-                                parts.append(t)
-                            else:
-                                c = getattr(p, "content", None)
-                                if isinstance(c, str):
-                                    parts.append(c)
-                    if parts:
-                        return "".join(parts)
-            # Fallback (avoid noisy reprs)
-            rep = str(chunk)
-            if rep.startswith("<"):
-                return ""
-            return rep
-        except Exception:
-            return ""
-
     async def process_request_stream(self, query: str, context: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
-        session_id = context.get("sessionId", "default")
+        session_id = context.get("session_id", "default")
         context["query"] = query
         enriched_context = await self._enrich_context(context)
         yield StreamingChunk(response="Processing your request...", complete=False).model_dump(by_alias=True)
-        await self._ensure_thread(session_id)
+
+        session = self._get_session(session_id)
+        prompt = f"Query: {query}\nContext: {json.dumps(enriched_context, default=str)}"
         full_response = ""
         try:
-            async for chunk in self.manager.invoke_stream(
-                messages=f"Query: {query}\nContext: {json.dumps(enriched_context, default=str)}",
-                thread=self.thread,
-            ):
-                candidate = self._extract_candidate_text(chunk)
-                if candidate:
-                    candidate = candidate.replace("\r", "")
-                    full_response += candidate
+            async for chunk in self.manager.run(prompt, session=session, stream=True):
+                text = ""
+                if hasattr(chunk, "text") and chunk.text:
+                    text = chunk.text
+                elif isinstance(chunk, str):
+                    text = chunk
+                if text:
+                    text = text.replace("\r", "")
+                    full_response += text
                     yield StreamingChunk(response=full_response, complete=False, plugins_used=[]).model_dump(by_alias=True)
             parsed = self._parse_response_safely(full_response or "I processed your request.")
             yield StreamingChunk(response=parsed.message, complete=True, plugins_used=parsed.plugins_used or []).model_dump(by_alias=True)
         except Exception as e:
             yield StreamingChunk(response="Error processing request.", complete=True, plugins_used=[], error=str(e)).model_dump(by_alias=True)
-
-
 
 
 # FastAPI scoped dependency factory

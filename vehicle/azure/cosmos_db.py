@@ -14,9 +14,9 @@ from azure.cosmos.aio import CosmosClient
 from azure.cosmos import PartitionKey
 from azure.core.exceptions import AzureError
 from azure.identity.aio import (
+    AzureCliCredential,
     DefaultAzureCredential,
     ManagedIdentityCredential,
-    AzureDeveloperCliCredential
 )
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 
@@ -59,22 +59,12 @@ class CosmosDBClient:
         self.use_aad_auth = os.getenv("COSMOS_DB_USE_AAD", "false").lower() == "true"
         self.database_name = os.getenv("COSMOS_DB_DATABASE", "VehiclePlatformDB")
 
-        # Container names with validation
-        self.vehicles_container_name = os.getenv(
-            "COSMOS_DB_CONTAINER_VEHICLES", "vehicles"
-        )
-        self.services_container_name = os.getenv(
-            "COSMOS_DB_CONTAINER_SERVICES", "services"
-        )
-        self.commands_container_name = os.getenv(
-            "COSMOS_DB_CONTAINER_COMMANDS", "commands"
-        )
-        self.notifications_container_name = os.getenv(
-            "COSMOS_DB_CONTAINER_NOTIFICATIONS", "notifications"
-        )
-        self.status_container_name = os.getenv(
-            "COSMOS_DB_CONTAINER_STATUS", "vehiclestatus"
-        )
+        # Container names (hardcoded – override via env was never used)
+        self.vehicles_container_name = "vehicles"
+        self.services_container_name = "services"
+        self.commands_container_name = "commands"
+        self.notifications_container_name = "notifications"
+        self.status_container_name = "vehiclestatus"
 
         # Client instances
         self.client = None
@@ -124,19 +114,15 @@ class CosmosDBClient:
         return doc
 
     @staticmethod
-    def _camel_case_key(key: str) -> str:
-        if not isinstance(key, str) or key.startswith("_") or "_" not in key:
-            return key
-        parts = key.split("_")
-        return parts[0] + "".join(p.capitalize() for p in parts[1:] if p)
-
-    @classmethod
-    def _to_camel(cls, obj):
-        if isinstance(obj, dict):
-            return {cls._camel_case_key(k): cls._to_camel(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [cls._to_camel(v) for v in obj]
-        return obj
+    def _ensure_timestamp(doc: Dict[str, Any]):
+        """Inject ISO timestamp if missing but _ts present."""
+        if doc and "timestamp" not in doc and "_ts" in doc:
+            doc["timestamp"] = (
+                datetime.fromtimestamp(doc["_ts"], tz=timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+        return doc
 
     async def _query_one(
         self,
@@ -158,7 +144,6 @@ class CosmosDBClient:
             )
             async for item in items:
                 self._ensure_timestamp(item)
-                item = self._to_camel(item)
                 return model_cls(**item) if model_cls else item
             return None
         except Exception as e:
@@ -211,10 +196,15 @@ class CosmosDBClient:
         else:
             tenant_id = os.getenv("AZURE_TENANT_ID") or os.getenv("AZD_TENANT_ID") or os.getenv("AZURE_AD_TENANT_ID")
             try:
-                self._credential = AzureDeveloperCliCredential(tenant_id=tenant_id)
+                self._credential = (
+                    AzureCliCredential(tenant_id=tenant_id)
+                    if tenant_id
+                    else AzureCliCredential()
+                )
                 await self._credential.get_token("https://management.azure.com/.default")
             except Exception:
                 self._credential = DefaultAzureCredential(
+                    exclude_cli_credential=True,
                     exclude_developer_cli_credential=True,
                     exclude_interactive_browser_credential=True,
                 )
@@ -681,7 +671,7 @@ class CosmosDBClient:
             logger.error(f"Error deleting notification: {e}")
             return False
 
-    # Removed unused _to_camel helper (model-based conversion now)
+    # Container name env overrides removed – defaults are always used
 
 
 @lru_cache(maxsize=1)

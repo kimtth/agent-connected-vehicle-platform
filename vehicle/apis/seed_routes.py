@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Body, HTTPException
 from typing import Optional
 from datetime import datetime, timezone
-import uuid, random, logging
+import uuid
+import random
+import logging
 
 from azure.cosmos_db import get_cosmos_client
 from models.seed import (

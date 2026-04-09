@@ -1,6 +1,3 @@
 """
-Initialize agent creation and route registration.
+Agent modules for the Connected Vehicle Platform.
 """
-
-from fastapi import FastAPI, APIRouter
-from apis.agent_routes import router as agent_router

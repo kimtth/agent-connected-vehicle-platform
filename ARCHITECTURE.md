@@ -1,17 +1,17 @@
 # Agentic Connected Vehicle Platform
 
-An intelligent vehicle management platform where specialized AI agents handle different aspects of vehicle operations and user interactions through natural language processing. Built with FastAPI, Semantic Kernel, React.js, and Azure Cloud Services.
+An intelligent vehicle management platform where specialized AI agents handle different aspects of vehicle operations and user interactions through natural language processing. Built with FastAPI, Microsoft Agent Framework, React.js, and Azure Cloud Services.
 
 ## Project Details
 - **Features**  
   Natural-language agent interface; Remote access (lock/unlock, engine start/stop); EV charging & energy optimization; Weather, traffic & POI info; In-car controls (climate, lights, windows); Diagnostics & predictive maintenance; Alerts & notifications.
 - **Tech Stack**  
-  Python 3.12+, FastAPI, Semantic Kernel, Azure Cosmos DB (AAD auth), Azure OpenAI, React.js, Material-UI.
+  Python 3.13+, FastAPI, Microsoft Agent Framework (`agent-framework`, `agent-framework-openai`), Azure Cosmos DB (AAD auth), Azure OpenAI / OpenAI, React.js, Tailwind CSS.
 - **Deployment**  
   Azure App Service, Azure Cosmos DB, Azure OpenAI Service, AAD authentication.
 
 Notes:
-- MCP services use plugin/sample_data.py (no external keys needed by default).
+- MCP services use plugin/mcp_mock_data.py (no external keys needed by default).
 
 ## Naming & Serialization
 - API + stored JSON: camelCase (enforced by CamelModel).
@@ -57,7 +57,7 @@ The platform implements a sophisticated multi-agent system that provides two pri
 
 ### Key Components
 
-- **Agent Manager** - Central orchestrator using Semantic Kernel for intent interpretation, agent routing, and optional Server-Sent Events (SSE) streaming responses
+- **Agent Manager** - Central orchestrator using Microsoft Agent Framework for intent interpretation, tool-based agent routing, and optional Server-Sent Events (SSE) streaming responses
 - **Specialized Agents** - Domain-specific agents for vehicle operations (7 specialized agents)
 - **Vehicle Management** - Comprehensive vehicle profiles, status monitoring, and service records
 - **Command Execution** - Asynchronous vehicle control operations with real-time status tracking
@@ -184,15 +184,15 @@ sequenceDiagram
     participant AgentAPI as Agent API
     participant Manager as Agent Manager
     participant Agent as Specialized Agent
-    participant Plugin as Agent Plugin
+    participant Plugin as Agent Tool
     participant Cosmos as Cosmos DB
     participant Vehicle as Vehicle
 
     User->>AgentAPI: "Lock my car doors"
     AgentAPI->>Manager: Process with context
-    Manager->>Manager: Analyze intent (SK)
+    Manager->>Manager: Analyze intent (MAF)
     Manager->>Agent: Route to Remote Access Agent
-    Agent->>Plugin: Execute door_lock function
+    Agent->>Plugin: Execute door_lock tool
 
     Plugin->>Cosmos: Validate vehicle exists
     Cosmos-->>Plugin: Vehicle data
@@ -226,7 +226,7 @@ sequenceDiagram
 - `POST /api/agent/recommend/services` – Service recommendation generation (currently handled via Feature Control agent pipeline)
 
 ### Direct Vehicle Control / Feature / Emergency Routers
-Explicit REST-style endpoints (bypass NL intent) for structured apps. All accept query parameter `direct_api_call=true|false` (default `true`). When `false`, request is routed through the AgentManager instead of directly invoking the domain plugin.
+Explicit REST-style endpoints (bypass NL intent) for structured apps. All requests are routed through the AgentManager.
 - `POST /api/vehicles/{vehicle_id}/remote-access/doors` – Body: `{ "action": "lock|unlock" }`
 - `POST /api/vehicles/{vehicle_id}/remote-access/engine` – Body: `{ "action": "start|stop" }`
 - `POST /api/vehicles/{vehicle_id}/remote-access/locate` – Activate horn & lights
@@ -237,7 +237,7 @@ Explicit REST-style endpoints (bypass NL intent) for structured apps. All accept
 - `POST /api/vehicles/{vehicle_id}/features/lights` – Control lights (`light_type`, `action`)
 - `POST /api/vehicles/{vehicle_id}/features/climate` – Climate / temperature control
 - `POST /api/vehicles/{vehicle_id}/features/windows` – Window control (`action`, `windows`)
-- `GET  /api/vehicles/{vehicle_id}/features/status` – Aggregated feature status (direct plugin or via agent depending on `direct_api_call`)
+- `GET  /api/vehicles/{vehicle_id}/features/status` – Aggregated feature status
 
 ### Core Platform & Data APIs
 - `GET    /api/vehicles` – List vehicle profiles

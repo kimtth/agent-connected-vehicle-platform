@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional, List, Dict
+from typing import Any, Optional, Dict
 from .base import BaseSchemaModel
 
 # Assuming global camelCase alias generation is configured centrally (models.py),

@@ -32,5 +32,11 @@ def start_traffic_server(host: str | None = None, port: int = 8002):
     if host is None:
         host = "127.0.0.1"
     logger.info(f"Starting Traffic MCP server on {host}:{port}")
-    mcp_traffic_server.run(transport="http", host=host, port=port, path="/mcp")
+    mcp_traffic_server.run(
+        transport="http",
+        host=host,
+        port=port,
+        path="/mcp",
+        uvicorn_config={"ws": "websockets"},
+    )
     logger.info(f"Traffic MCP server exited on {host}:{port}")

@@ -90,6 +90,7 @@ function App() {
       <MainLayout
         themeMode={themeMode}
         toggleTheme={toggleTheme}
+        onToggleTheme={toggleTheme}
         vehicles={vehicles}
         selectedVehicle={selectedVehicle}
         onVehicleChange={handleVehicleChange}

@@ -21,16 +21,15 @@ services:
       - API_PORT=8000
       - LOG_LEVEL=INFO
       
-      # Cosmos DB Configuration (use your Azure Cosmos DB)
+      # Cosmos DB (managed identity or key)
       - COSMOS_DB_ENDPOINT=${COSMOS_DB_ENDPOINT}
-      - COSMOS_DB_KEY=${COSMOS_DB_KEY}
       - COSMOS_DB_DATABASE=${COSMOS_DB_DATABASE:-VehiclePlatformDB}
       - COSMOS_DB_USE_AAD=${COSMOS_DB_USE_AAD:-false}
+      - COSMOS_DB_KEY=${COSMOS_DB_KEY:-}
       
-      # Azure OpenAI
-      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      # Azure OpenAI (managed identity – no API key)
       - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
-      - AZURE_OPENAI_DEPLOYMENT_NAME=${AZURE_OPENAI_DEPLOYMENT_NAME}
+      - AZURE_OPENAI_MODEL=${AZURE_OPENAI_MODEL}
       - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION}
       
       # Azure Speech

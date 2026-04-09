@@ -4,8 +4,8 @@ import requests
 from fastapi import APIRouter, HTTPException
 from models.api_request import AskAIRequest
 from models.api_responses import AIResponse, SpeechTokenResponse, GenericPayloadResponse
-from plugin.oai_service import create_chat_service
-from semantic_kernel.agents import ChatCompletionAgent
+from agent_framework import Agent
+from plugin.oai_service import create_chat_client
 
 router = APIRouter(prefix="/speech", tags=["Speech"])
 
@@ -78,12 +78,12 @@ def speech_ice_token():
 @router.post("/ask_ai", response_model=AIResponse)
 async def ask_ai(req: AskAIRequest):
     """
-    Direct AI response using Semantic Kernel ChatCompletionAgent.
+    Direct AI response using Microsoft Agent Framework.
     Supports conversation history and vehicle context.
     Accepts optional language_code from client to localize response.
     """
     try:
-        service = create_chat_service()
+        client = create_chat_client()
         language_code = req.language_code  # Provided by frontend (auto-detected)
 
         # Enhanced system prompt for vehicle context
@@ -102,30 +102,18 @@ async def ask_ai(req: AskAIRequest):
         if language_code:
             system_prompt += f"{os.linesep} Please respond in {language_code}."
 
-        agent = ChatCompletionAgent(
-            service=service,
+        agent = Agent(
+            client=client,
             name="VehicleAssistant",
             instructions=system_prompt,
         )
 
-        messages = req.normalized_messages()
-        if not messages:
+        prompt = req.normalized_messages_text()
+        if not prompt:
             raise HTTPException(status_code=400, detail="Empty message payload")
 
-        sk_response = await agent.get_response(messages=messages)
-
-        # Safely extract message/content from Semantic Kernel response.
-        message_obj = getattr(sk_response, "message", None)
-        if message_obj is None:
-            # Fallback to string representation of the response
-            response_text = str(sk_response).strip()
-        else:
-            content = getattr(message_obj, "content", "") or str(message_obj)
-            role = getattr(message_obj, "role", "").lower() if getattr(message_obj, "role", None) else ""
-            response_text = content.strip()
-
-            if role == "system" and response_text:
-                response_text = response_text
+        result = await agent.run(prompt)
+        response_text = result.text.strip() if hasattr(result, "text") else str(result).strip()
 
         if not response_text:
             raise HTTPException(status_code=502, detail="Empty response from AI service")

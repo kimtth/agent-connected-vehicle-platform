@@ -32,5 +32,11 @@ def start_navigation_server(host: str | None = None, port: int = 8004):
     if host is None:
         host = "127.0.0.1"
     logger.info(f"Starting Navigation MCP server on {host}:{port}")
-    mcp_navigation_server.run(transport="http", host=host, port=port, path="/mcp")
+    mcp_navigation_server.run(
+        transport="http",
+        host=host,
+        port=port,
+        path="/mcp",
+        uvicorn_config={"ws": "websockets"},
+    )
     logger.info(f"Navigation MCP server exited on {host}:{port}")

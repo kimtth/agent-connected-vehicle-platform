@@ -1,6 +1,6 @@
 import os
 from azure.cosmos import CosmosClient
-from azure.identity import DefaultAzureCredential, ManagedIdentityCredential, AzureDeveloperCliCredential
+from azure.identity import AzureCliCredential
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -11,7 +11,7 @@ try:
     # credential = DefaultAzureCredential()
 
     # Development
-    credential = AzureDeveloperCliCredential(tenant_id=os.getenv("AZURE_TENANT_ID"))
+    credential = AzureCliCredential(tenant_id=os.getenv("AZURE_TENANT_ID"))
     token = credential.get_token("https://management.azure.com/.default")
     print(token.token)
 

@@ -1,5 +1,9 @@
 ### --- FRONTEND BUILD STAGE --- ###
-FROM node:25-bookworm-slim AS frontend-build
+FROM node:22-bookworm-slim AS frontend-build
+
+# Enable pnpm via corepack
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
 WORKDIR /app/web
 
 # Build-time environment variables for React
@@ -16,33 +20,29 @@ ENV REACT_APP_API_DEV_BASE_URL=$REACT_APP_API_DEV_BASE_URL
 ENV NODE_ENV=$NODE_ENV
 
 # Copy package files for better layer caching
-COPY web/package.json web/package-lock.json ./
-RUN npm ci --legacy-peer-deps
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 # Copy source and build
 COPY web/ ./
-RUN npm run build && rm -rf src node_modules
+RUN pnpm run build && rm -rf src node_modules
 
 ### --- BACKEND BUILD STAGE --- ###
-FROM python:3.12-slim AS backend-build
+FROM python:3.13-slim AS backend-build
 WORKDIR /app/vehicle
 
-# Install poetry and configure
-RUN pip install --no-cache-dir poetry==1.8.3 && \
-    poetry config virtualenvs.create false
+# Install uv for fast dependency management
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Copy only dependency files first for better caching
 COPY vehicle/pyproject.toml ./
-# Copy poetry.lock if it exists (optional)
-COPY vehicle/poetry.lock* ./
-RUN poetry install --no-interaction --no-ansi --no-root --only main && \
-    pip cache purge
+RUN uv pip install --system --no-cache -r pyproject.toml
 
 # Copy application code
 COPY vehicle/ ./
 
 ### --- FINAL IMAGE --- ###
-FROM python:3.12-slim
+FROM python:3.13-slim
 
 # Add labels for better container management
 LABEL maintainer="your-email@example.com" \
@@ -62,7 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
 
 # Copy Python dependencies from backend-build
-COPY --from=backend-build /usr/local/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/
+COPY --from=backend-build /usr/local/lib/python3.13/site-packages/ /usr/local/lib/python3.13/site-packages/
 COPY --from=backend-build /usr/local/bin/ /usr/local/bin/
 
 # Copy backend code
