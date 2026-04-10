@@ -3,7 +3,7 @@ import uuid
 from typing import Annotated
 
 from agent_framework import tool
-from azure.cosmos_db import get_cosmos_client
+from vehicle_azure.cosmos_db import get_cosmos_client
 from utils.logging_config import get_logger
 from utils.vehicle_object_utils import notification_to_dict
 from agents.base.base_agent import format_tool_response

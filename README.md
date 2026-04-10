@@ -91,15 +91,24 @@ az group create --name <resource-group-name> --location <location-name>
 cd infra
 powershell ./run_infra_deploy.ps1
 cd ..
-
-# Set the startup command in your Azure Web App configuration:
-az webapp config set --resource-group <resource-group-name> --name <app-name> --startup-file "python main.py"
-
-# Azure Portal: Add your webapp URL to Entra ID > Authentification > Single-page application > Redirect URIs
-
-# Assing Data Contributor role to Cosmos DB: Webapp > Identity > System assigned > On
-# az cosmosdb sql role assignment create --account-name <cosmos-db-account-name> --resource-group <resource-group-name> --scope / --principal-id <web-app-principal-id> --role-definition-id 00000000-0000-0000-0000-000000000002
 ```
+
+Deploy the backend package to App Service with the repository script:
+
+```powershell
+cd infra
+./run_webapp_deploy.ps1 -ResourceGroup <resource-group-name> -WebAppName <app-name>
+```
+
+The deployment script:
+- Regenerates `uv.lock` and `vehicle/requirements.txt` from `vehicle/pyproject.toml`
+- Builds the backend zip package from the current source tree
+- Ensures the App Service startup command uses Gunicorn with the Uvicorn worker
+- Uploads the package with `az webapp deploy`
+
+After deployment:
+- Azure Portal: add your web app URL to Entra ID > Authentication > Single-page application > Redirect URIs
+- Cosmos DB: enable the web app system-assigned managed identity and grant the required Cosmos DB data-plane role
 
 Note: 
 MCP services use deterministic sample data in plugin/mcp_mock_data.py.

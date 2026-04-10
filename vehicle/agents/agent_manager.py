@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional, AsyncGenerator, List
 import json
 
 from agent_framework import Agent
-from azure.cosmos_db import get_cosmos_client
+from vehicle_azure.cosmos_db import get_cosmos_client
 
 from agents.alerts_notifications_agent import ALERTS_NOTIFICATIONS_TOOLS
 from agents.charging_energy_agent import CHARGING_ENERGY_TOOLS

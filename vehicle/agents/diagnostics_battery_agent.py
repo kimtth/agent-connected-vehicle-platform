@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List, Annotated
 from datetime import datetime, timedelta, timezone
 
 from agent_framework import tool
-from azure.cosmos_db import get_cosmos_client
+from vehicle_azure.cosmos_db import get_cosmos_client
 from utils.logging_config import get_logger
 from utils.vehicle_object_utils import find_vehicle, ensure_dict
 from agents.base.base_agent import format_tool_response
