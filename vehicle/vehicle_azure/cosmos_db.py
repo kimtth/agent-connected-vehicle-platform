@@ -32,8 +32,6 @@ from models.notification import Notification
 logger = get_logger(__name__)
 
 
-
-
 class CosmosDBClient:
     """Azure Cosmos DB client implementation for Connected Car Platform"""
 
@@ -149,10 +147,6 @@ class CosmosDBClient:
         except Exception as e:
             logger.error(f"Query failed: {e}")
             return None
-
-
-
-
 
     async def connect(self):
         if not self.endpoint or not self.database_name:
@@ -370,8 +364,6 @@ class CosmosDBClient:
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit"""
         await self.close()
-
-
 
     # Vehicle Status operations
 

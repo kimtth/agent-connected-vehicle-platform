@@ -381,7 +381,7 @@ You can use a single app registration for both the SPA frontend and API backend.
    - Redirect URI: `http://localhost:3000` (for development)
    - For production, add: `https://your-domain.com`
 3. Under **Implicit grant and hybrid flows**:
-   - Check: ✓ Access tokens, ✓ ID tokens
+   - Leave both **Access tokens** and **ID tokens** **unchecked** (MSAL.js uses authorization code flow with PKCE, which is more secure and the current recommended default)
 
 #### Step 3: Expose an API
 1. Navigate to **Expose an API**
@@ -429,8 +429,8 @@ REACT_APP_AZURE_SCOPE=api://<your-app-client-id>/access_as_user
 
 Validation steps:
 1. SPA acquires token with the scope above.
-2. Token aud (inspect via https://jwt.ms) should be api://<your-app-client-id>.
-3. Backend accepts and attaches claims to request.state.user.
+2. Token `aud` (inspect via https://jwt.ms) should be `api://<your-app-client-id>` or the raw GUID `<your-app-client-id>` — the backend accepts both forms.
+3. Backend accepts and attaches claims to `request.state.user`.
 
 ## Getting Started
 
@@ -679,7 +679,7 @@ logger = get_logger(__name__)
 ```python
 # Minimal connectivity test
 import asyncio
-from vehicle.azure.cosmos_db import get_cosmos_client
+from vehicle_azure.cosmos_db import get_cosmos_client
 async def main():
     client = await get_cosmos_client()
     await client.ensure_connected()

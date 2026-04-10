@@ -330,3 +330,4 @@ memo.md
 *.sh
 /temp
 .env.docker
+requirements.txt

@@ -4,6 +4,7 @@ Main application for the connected vehicle platform.
 
 import sys
 import os
+
 import asyncio
 import logging
 import json
@@ -11,7 +12,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 import atexit
-from pathlib import Path
 from datetime import datetime, timezone
 from uuid import uuid4
 import socket
@@ -43,9 +43,9 @@ from models.api_responses import (
 from models.notification import Notification
 from dotenv import load_dotenv
 from importlib import import_module
-from azure.azure_auth import AzureADMiddleware
+from vehicle_azure.azure_auth import AzureADMiddleware
 from fastapi import Request
-from azure.cosmos_db import get_cosmos_client
+from vehicle_azure.cosmos_db import get_cosmos_client
 from plugin.mcp_weather_server import start_weather_server
 from plugin.mcp_traffic_server import start_traffic_server
 from plugin.mcp_poi_server import start_poi_server
@@ -53,11 +53,6 @@ from plugin.mcp_navigation_server import start_navigation_server
 
 # Configure loguru with better error handling
 from utils.logging_config import configure_logging
-
-
-# Add the project root to Python path
-project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
 
 # Load environment variables first
 load_dotenv(override=True)
@@ -670,6 +665,20 @@ if not os.path.isdir(assets_dir):
 app.mount("/static", StaticFiles(directory=assets_dir), name="static")
 
 
+def _serve_frontend_index():
+    index_path = os.path.join(build_root, "index.html")
+    if not os.path.isfile(index_path):
+        return None
+    return FileResponse(
+        index_path,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
+
+
 @app.middleware("http")
 async def robots_wildcard(request, call_next):
     # Serve any root-level robots*.txt (e.g. /robots.txt, /robots933456.txt, /robots-any.txt)
@@ -686,9 +695,9 @@ async def robots_wildcard(request, call_next):
 # Root must be defined BEFORE the catch-all
 @app.get("/")
 async def serve_root():
-    index_path = os.path.join(build_root, "index.html")
-    if os.path.isfile(index_path):
-        return FileResponse(index_path)
+    index_response = _serve_frontend_index()
+    if index_response is not None:
+        return index_response
     return {"message": "Connected Car Platform API", "frontend": "not built"}
 
 
@@ -697,9 +706,9 @@ async def serve_react_app(full_path: str):
     # Don't intercept API or static asset requests
     if full_path.startswith("api/") or full_path.startswith("static/"):
         raise HTTPException(status_code=404, detail="API or static asset not found")
-    index_path = os.path.join(build_root, "index.html")
-    if os.path.isfile(index_path):
-        return FileResponse(index_path)
+    index_response = _serve_frontend_index()
+    if index_response is not None:
+        return index_response
     raise HTTPException(status_code=404, detail="Frontend not built")
 
 

@@ -2,6 +2,7 @@ import os
 import time
 import requests
 from fastapi import APIRouter, HTTPException
+from azure.identity import DefaultAzureCredential
 from models.api_request import AskAIRequest
 from models.api_responses import AIResponse, SpeechTokenResponse, GenericPayloadResponse
 from agent_framework import Agent
@@ -12,14 +13,31 @@ router = APIRouter(prefix="/speech", tags=["Speech"])
 # Simple in-memory token cache (Speech tokens valid ~10 min)
 _TOKEN_CACHE = {"token": None, "expires": 0, "region": None}
 
+# Cognitive Services token scope for managed identity auth
+_COGNITIVE_SCOPE = "https://cognitiveservices.azure.com/.default"
+
+
+def _get_bearer_token() -> str:
+    """Obtain an Entra ID bearer token for Cognitive Services."""
+    credential = DefaultAzureCredential()
+    token = credential.get_token(_COGNITIVE_SCOPE)
+    return token.token
+
+
+def _get_speech_auth_headers() -> dict:
+    """Return auth headers using either API key or managed identity."""
+    speech_key = os.getenv("AZURE_SPEECH_KEY")
+    if speech_key:
+        return {"Ocp-Apim-Subscription-Key": speech_key}
+    return {"Authorization": f"Bearer {_get_bearer_token()}"}
+
 
 def _issue_speech_token():
-    speech_key = os.getenv("AZURE_SPEECH_KEY")
     speech_region = os.getenv("AZURE_SPEECH_REGION")
-    if not speech_key or not speech_region:
-        raise HTTPException(status_code=500, detail="Speech key/region not configured")
+    if not speech_region:
+        raise HTTPException(status_code=500, detail="Speech region not configured")
     url = f"https://{speech_region}.api.cognitive.microsoft.com/sts/v1.0/issueToken"
-    headers = {"Ocp-Apim-Subscription-Key": speech_key}
+    headers = _get_speech_auth_headers()
     try:
         resp = requests.post(url, headers=headers, timeout=5)
     except requests.RequestException as exc:
@@ -35,12 +53,11 @@ def _issue_speech_token():
 
 
 def _issue_ice_token():
-    speech_key = os.getenv("AZURE_SPEECH_KEY")
     speech_region = os.getenv("AZURE_SPEECH_REGION")
-    if not speech_key or not speech_region:
-        raise HTTPException(status_code=500, detail="Speech key/region not configured")
+    if not speech_region:
+        raise HTTPException(status_code=500, detail="Speech region not configured")
     url = f"https://{speech_region}.tts.speech.microsoft.com/cognitiveservices/avatar/relay/token/v1"
-    headers = {"Accept": "application/json", "Ocp-Apim-Subscription-Key": speech_key}
+    headers = {"Accept": "application/json", **_get_speech_auth_headers()}
     try:
         resp = requests.get(url, headers=headers, timeout=5)
     except requests.RequestException as exc:

@@ -5,7 +5,7 @@ import uuid
 import random
 import logging
 
-from azure.cosmos_db import get_cosmos_client
+from vehicle_azure.cosmos_db import get_cosmos_client
 from models.seed import (
     SeedResult,
     BulkSeedRequest,

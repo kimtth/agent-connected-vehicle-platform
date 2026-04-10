@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "acvp-backend"
 version = "0.2.0"
@@ -11,15 +15,23 @@ dependencies = [
     "openai>=2.8.0,<3.0.0",
     "httpx>=0.28.1,<0.29.0",
     "python-dotenv>=1.1.0,<2.0.0",
+    "aiohttp>=3.11.18,<4.0.0",
     "azure-identity>=1.21.0,<2.0.0",
     "azure-cosmos>=4.9.0,<5.0.0",
     "azure-storage-blob>=12.25.1,<13.0.0",
     "azure-mgmt-resource>=23.3.0,<24.0.0",
     "azure-mgmt-cosmosdb>=9.7.0,<10.0.0",
     "fastmcp>=2.12.4,<3.0.0",
+    "gunicorn>=23.0.0,<24.0.0",
     "jwcrypto>=1.5.6,<2.0.0",
     "loguru>=0.7.2,<0.8.0",
-    "agent-framework",
-    "agent-framework-openai",
+    "agent-framework-core>=1.0.0,<2.0.0",
+    "agent-framework-openai>=1.0.0,<2.0.0",
     "ruff>=0.15.9",
 ]
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["agents", "agents.*", "apis", "models", "plugin", "utils", "vehicle_azure", "vehicle_azure.*"]

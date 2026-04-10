@@ -28,12 +28,11 @@ class AzureADMiddleware(BaseHTTPMiddleware):
         self.jwks_uri = "https://login.microsoftonline.com/common/discovery/keys"
         self.jwk_client = PyJWKClient(self.jwks_uri)
         raw_audience = os.getenv("AZURE_CLIENT_ID")
-        graph_api_audience = "00000003-0000-0000-c000-000000000000"
         if raw_audience:
             guid = raw_audience.replace("api://", "") if raw_audience.startswith("api://") else raw_audience
-            self.audiences = [raw_audience, graph_api_audience, guid] if raw_audience.startswith("api://") else [raw_audience, f"api://{raw_audience}", graph_api_audience]
+            self.audiences = [raw_audience, guid] if raw_audience.startswith("api://") else [raw_audience, f"api://{raw_audience}"]
         else:
-            self.audiences = [graph_api_audience]
+            self.audiences = []
         self.exclude_exact = {"/", "/health", "/api/info", "/api/health", "/api/debug/cosmos", "/openapi.json", "/favicon.ico"}
         self.exclude_prefixes = ("/docs", "/static", "/redoc", "/api/dev/seed")
 
@@ -121,12 +120,11 @@ class AzureADBearer(HTTPBearer):
         self.jwks_uri = "https://login.microsoftonline.com/common/discovery/keys"
         self.jwk_client = PyJWKClient(self.jwks_uri)
         raw_audience = os.getenv("AZURE_CLIENT_ID")
-        graph_api_audience = "00000003-0000-0000-c000-000000000000"
         if raw_audience:
             guid = raw_audience.replace("api://", "") if raw_audience.startswith("api://") else raw_audience
-            self.audiences = [graph_api_audience, raw_audience, guid] if raw_audience.startswith("api://") else [graph_api_audience, raw_audience, f"api://{raw_audience}"]
+            self.audiences = [raw_audience, guid] if raw_audience.startswith("api://") else [raw_audience, f"api://{raw_audience}"]
         else:
-            self.audiences = [graph_api_audience]
+            self.audiences = []
 
     def _get_signing_key(self, token: str) -> Optional[str]:
         """Get signing key from JWKS endpoint."""

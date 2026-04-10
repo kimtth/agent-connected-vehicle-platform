@@ -20,8 +20,8 @@ Welcome to the project! This README provides instructions for setting up and usi
 Backend (Python / FastAPI) lives in `vehicle/` and is the system of record + agent hub. Key layers:
 - Entry point: `vehicle/main.py` – config, middleware, router loading, SSE streaming, MCP sidecar process launch (weather/traffic/poi/navigation on ports 8001–8004) and graceful shutdown.
 - Routers: `vehicle/apis/*.py` grouped by domain (agents, vehicle features, remote access, emergency/safety, speech, dev seed). Loaded dynamically in `lifespan()`; missing modules are tolerated (log a warning, continue startup).
-- Data access: `vehicle/azure/cosmos_db.py` – async singleton (`get_cosmos_client()`) with resilient connect / retry, container auto-provisioning, polling-based status subscription (no change feed listener yet), camelCase storage via Pydantic models.
-- Auth: `vehicle/azure/azure_auth.py` – middleware validating Azure AD JWT if configured; supports optional mode. Accepts both raw GUID and `api://GUID` audiences, plus multiple acquisition channels (headers, query, cookies, DEV_BEARER_TOKEN env). Certain dev endpoints bypass auth.
+- Data access: `vehicle/vehicle_azure/cosmos_db.py` – async singleton (`get_cosmos_client()`) with resilient connect / retry, container auto-provisioning, polling-based status subscription (no change feed listener yet), camelCase storage via Pydantic models.
+- Auth: `vehicle/vehicle_azure/azure_auth.py` – middleware validating Azure AD JWT if configured; supports optional mode. Accepts both raw GUID and `api://GUID` audiences, plus multiple acquisition channels (headers, query, cookies, DEV_BEARER_TOKEN env). Certain dev endpoints bypass auth.
 - Agents: `vehicle/agents/*` – Microsoft Agent Framework `Agent` instances orchestrated by `AgentManager` (`agent_manager.py`). Manager aggregates domain agent tools (decorated with `@tool`) + general tools (`plugin/general_tools.py`) into a single coordinating agent and provides streaming + fallback logic.
 - Plugins / AI client factory: `vehicle/plugin/oai_service.py` returns an `OpenAIChatClient` from `agent-framework-openai` which auto-detects Azure OpenAI (managed identity or API key) vs OpenAI from environment variables.
 - Models: `vehicle/models/*.py` – All inherit from `CamelModel` which enforces outbound camelCase and accepts inbound snake_case or camelCase.
@@ -86,7 +86,7 @@ python main.py
 
 ## 11. Quick Reference: Key Files
 - `vehicle/main.py` – server lifecycle, routes inclusion, SSE, MCP subprocess management.
-- `vehicle/azure/cosmos_db.py` – data layer & polling subscription.
+- `vehicle/vehicle_azure/cosmos_db.py` – data layer & polling subscription.
 - `vehicle/agents/agent_manager.py` – orchestration via Microsoft Agent Framework `Agent` with all domain tools.
 - `vehicle/apis/agent_routes.py` – agent HTTP interface (+ streaming).
 - `vehicle/models/base.py` – camelCase model contract.
