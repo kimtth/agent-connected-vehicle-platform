@@ -331,3 +331,4 @@ memo.md
 /temp
 .env.docker
 requirements.txt
+deploy.zip
