@@ -2,11 +2,14 @@ import os
 import time
 import requests
 from fastapi import APIRouter, HTTPException
-from azure.identity import DefaultAzureCredential
+from azure.identity import AzureCliCredential, DefaultAzureCredential, ManagedIdentityCredential
 from models.api_request import AskAIRequest
 from models.api_responses import AIResponse, SpeechTokenResponse, GenericPayloadResponse
 from agent_framework import Agent
 from plugin.oai_service import create_chat_client
+from utils.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/speech", tags=["Speech"])
 
@@ -16,12 +19,33 @@ _TOKEN_CACHE = {"token": None, "expires": 0, "region": None}
 # Cognitive Services token scope for managed identity auth
 _COGNITIVE_SCOPE = "https://cognitiveservices.azure.com/.default"
 
+_AZURE_ENV_VARS = ["WEBSITE_SITE_NAME", "WEBSITE_INSTANCE_ID", "MSI_ENDPOINT", "IDENTITY_ENDPOINT"]
+
 
 def _get_bearer_token() -> str:
-    """Obtain an Entra ID bearer token for Cognitive Services."""
-    credential = DefaultAzureCredential()
-    token = credential.get_token(_COGNITIVE_SCOPE)
-    return token.token
+    """Obtain an Entra ID bearer token for Cognitive Services.
+
+    On App Service uses system-assigned ManagedIdentityCredential (avoids
+    AZURE_CLIENT_ID being misinterpreted as a user-assigned MI client ID).
+    Locally falls back to AzureCliCredential then DefaultAzureCredential.
+    """
+    try:
+        if any(os.getenv(v) for v in _AZURE_ENV_VARS):
+            credential = ManagedIdentityCredential()
+        else:
+            tenant_id = os.getenv("AZURE_TENANT_ID")
+            try:
+                credential = AzureCliCredential(tenant_id=tenant_id) if tenant_id else AzureCliCredential()
+            except Exception:
+                credential = DefaultAzureCredential(exclude_interactive_browser_credential=True)
+        token = credential.get_token(_COGNITIVE_SCOPE)
+        return token.token
+    except Exception as exc:
+        logger.error(f"Failed to acquire Cognitive Services bearer token: {exc}")
+        raise HTTPException(
+            status_code=503,
+            detail="Speech authentication is not configured correctly.",
+        ) from exc
 
 
 def _get_speech_auth_headers() -> dict:
@@ -32,11 +56,28 @@ def _get_speech_auth_headers() -> dict:
     return {"Authorization": f"Bearer {_get_bearer_token()}"}
 
 
-def _issue_speech_token():
+def _get_speech_endpoint() -> str:
+    """Return the base Speech endpoint.
+
+    When a custom subdomain is configured (AZURE_SPEECH_ENDPOINT), use it
+    (required for managed-identity / token auth).  Otherwise fall back to
+    the regional endpoint (works only with API key).
+    """
+    endpoint = os.getenv("AZURE_SPEECH_ENDPOINT")
+    if endpoint:
+        return endpoint.rstrip("/")
     speech_region = os.getenv("AZURE_SPEECH_REGION")
     if not speech_region:
-        raise HTTPException(status_code=500, detail="Speech region not configured")
-    url = f"https://{speech_region}.api.cognitive.microsoft.com/sts/v1.0/issueToken"
+        raise HTTPException(status_code=503, detail="Speech region not configured")
+    return f"https://{speech_region}.api.cognitive.microsoft.com"
+
+
+def _issue_speech_token():
+    base = _get_speech_endpoint()
+    speech_region = os.getenv("AZURE_SPEECH_REGION")
+    if not speech_region:
+        raise HTTPException(status_code=503, detail="Speech region not configured")
+    url = f"{base}/sts/v1.0/issueToken"
     headers = _get_speech_auth_headers()
     try:
         resp = requests.post(url, headers=headers, timeout=5)
@@ -45,7 +86,15 @@ def _issue_speech_token():
             status_code=502, detail=f"Failed to reach Speech service: {exc}"
         )
     if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        logger.warning(
+            f"Speech token request failed with status {resp.status_code}: {resp.text}"
+        )
+        if resp.status_code in (401, 403):
+            raise HTTPException(
+                status_code=503,
+                detail="Speech token request was rejected. Check AZURE_SPEECH_KEY and AZURE_SPEECH_REGION.",
+            )
+        raise HTTPException(status_code=502, detail="Speech token request failed.")
     # Cache for 9 minutes (token lifetime 10 minutes)
     _TOKEN_CACHE.update(
         {"token": resp.text, "expires": time.time() + 9 * 60, "region": speech_region}
@@ -55,9 +104,12 @@ def _issue_speech_token():
 def _issue_ice_token():
     speech_region = os.getenv("AZURE_SPEECH_REGION")
     if not speech_region:
-        raise HTTPException(status_code=500, detail="Speech region not configured")
+        raise HTTPException(status_code=503, detail="Speech region not configured")
+    # Ensure we have a valid speech token first (needed for relay auth)
+    cached = _get_cached_token()
+    # ICE relay endpoint uses the regional TTS host with the STS speech token
     url = f"https://{speech_region}.tts.speech.microsoft.com/cognitiveservices/avatar/relay/token/v1"
-    headers = {"Accept": "application/json", **_get_speech_auth_headers()}
+    headers = {"Accept": "application/json", "Authorization": f"Bearer {cached['token']}"}
     try:
         resp = requests.get(url, headers=headers, timeout=5)
     except requests.RequestException as exc:
@@ -65,7 +117,18 @@ def _issue_ice_token():
             status_code=502, detail=f"Failed to reach ICE token service: {exc}"
         )
     if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        logger.warning(
+            f"Speech ICE token request failed with status {resp.status_code}: {resp.text}"
+        )
+        if resp.status_code in (401, 403):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Speech avatar ICE token request was rejected. "
+                    "Check AZURE_SPEECH_KEY, AZURE_SPEECH_REGION, and avatar support on the Speech resource."
+                ),
+            )
+        raise HTTPException(status_code=502, detail="ICE token request failed.")
     try:
         return resp.json()
     except ValueError:

@@ -41,10 +41,10 @@ def _build_service_response(raw: dict, session_id: str, vehicle_id: str | None =
         response=raw.get("response", ""),
         success=raw.get("success", True),
         session_id=session_id,
-        plugins_used=raw.get("plugins_used", []),
+        plugins_used=raw.get("plugins_used", raw.get("pluginsUsed", [])),
         execution_time=raw.get("execution_time", 0),
         data=raw.get("data"),
-        fallback_used=raw.get("fallback_used", False),
+        fallback_used=raw.get("fallback_used", raw.get("fallbackUsed", False)),
         error=raw.get("error"),
         vehicle_id=vehicle_id,
     )
@@ -54,7 +54,7 @@ def _streaming_chunk_from(raw: dict, session_id: str) -> StreamingChunk:
     return StreamingChunk(
         response=raw.get("response", ""),
         complete=raw.get("complete", False),
-        plugins_used=raw.get("plugins_used", []),
+        plugins_used=raw.get("plugins_used", raw.get("pluginsUsed", [])),
         error=raw.get("error"),
         session_id=session_id,
     )
@@ -67,10 +67,11 @@ logger.debug("agent_routes module imported successfully")
 @router.post("/ask", response_model=None)
 async def ask_agent(request: AgentQueryRequest, agent_manager: "AgentManager" = Depends(_resolve_agent_manager)):
     session_id = request.session_id or str(uuid.uuid4())
-    context = request.context or {}
+    context = dict(request.context or {})
     context["session_id"] = session_id
-    agent_type = context.get("agent_type")
-    if agent_type:
+    # Frontend sends camelCase "agentType"; read both variants
+    agent_type = context.pop("agentType", None) or context.get("agent_type")
+    if agent_type and agent_type != "auto-select":
         agent_type_mapping = {
             "remote-access": "remote_access",
             "safety-emergency": "safety_emergency",
@@ -93,7 +94,7 @@ async def ask_agent(request: AgentQueryRequest, agent_manager: "AgentManager" = 
 # Pattern helper to reduce duplication
 async def _handle_direct_agent(request: AgentQueryRequest, agent_key: str, agent_manager: "AgentManager") -> Union[AgentServiceResponse, StreamingResponse]:
     session_id = request.session_id or str(uuid.uuid4())
-    context = request.context or {}
+    context = dict(request.context or {})
     context.update({"agent_type": agent_key, "session_id": session_id})
     if request.stream:
         async def stream_generator():

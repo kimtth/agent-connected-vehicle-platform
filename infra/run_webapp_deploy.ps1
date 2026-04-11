@@ -28,6 +28,7 @@ $packageItems = @(
     'pyproject.toml',
     'uv.lock',
     'requirements.txt',
+    'agent_framework',
     'agents',
     'apis',
     'models',
@@ -55,6 +56,9 @@ try {
     $startupCommand = 'gunicorn --bind=0.0.0.0 --timeout 600 -k uvicorn.workers.UvicornWorker main:app'
     Write-Output 'Ensuring web app startup command is set...'
     az webapp config set --name $WebAppName --resource-group $ResourceGroup --startup-file $startupCommand --output none
+
+    Write-Output 'Enabling Oryx build during deployment...'
+    az webapp config appsettings set --name $WebAppName --resource-group $ResourceGroup --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true --output none
 
     Write-Output 'Deploying package to Azure App Service...'
     if ($Async) {

@@ -42,7 +42,20 @@ class AgentManager:
             + ALERTS_NOTIFICATIONS_TOOLS
             + GENERAL_TOOLS
         )
-        client = create_chat_client()
+        self.manager: Agent | None = None
+        self._llm_init_error: str | None = None
+        self._initialize_manager()
+        # Session for multi-turn conversations (keyed by session_id)
+        self._sessions: Dict[str, Any] = {}
+
+    def _initialize_manager(self) -> None:
+        try:
+            client = create_chat_client()
+        except Exception as exc:
+            self._llm_init_error = str(exc)
+            logger.warning("Agent manager initialized without AI client: %s", exc)
+            return
+
         self.manager = Agent(
             client=client,
             name="VehicleManagerAgent",
@@ -55,11 +68,11 @@ class AgentManager:
             ),
             tools=self._all_tools,
         )
-        # Session for multi-turn conversations (keyed by session_id)
-        self._sessions: Dict[str, Any] = {}
 
     def _get_session(self, session_id: str):
         """Get or create a session for multi-turn conversations."""
+        if not self.manager:
+            return None
         if session_id not in self._sessions:
             self._sessions[session_id] = self.manager.create_session()
         return self._sessions[session_id]
@@ -97,18 +110,36 @@ class AgentManager:
             try:
                 parsed = json.loads(content)
                 if isinstance(parsed, dict):
+                    success = parsed.get("success")
+                    status = parsed.get("status")
+                    if status is None and isinstance(success, bool):
+                        status = "completed" if success else "error"
                     return ParsedAgentMessage(
                         message=parsed.get("message") or content,
-                        status=parsed.get("status") or "completed",
-                        plugins_used=parsed.get("plugins_used") or [],
+                        status=status or "completed",
+                        plugins_used=parsed.get("plugins_used") or plugins_used or [],
                         data=parsed.get("data"),
                     )
             except json.JSONDecodeError:
                 pass
         return ParsedAgentMessage(
             message=content or "Command executed successfully.",
-            plugins_used=[]
+            plugins_used=plugins_used or []
         )
+
+    def _build_llm_unavailable_response(self) -> Dict[str, Any]:
+        parsed = ParsedAgentMessage(
+            message=(
+                "AI routing is not configured on the backend. Configure OPENAI_API_KEY, "
+                "AZURE_OPENAI_API_KEY, or AZURE_OPENAI_ENDPOINT."
+            ),
+            status="error",
+        )
+        return self._build_agent_response(
+            parsed,
+            fallback_used=True,
+            error=self._llm_init_error or "ai_provider_not_configured",
+        ).model_dump(by_alias=True)
 
     def _build_agent_response(
         self,
@@ -129,17 +160,26 @@ class AgentManager:
         session_id = context.get("session_id", "default")
         context["query"] = query
         enriched_context = await self._enrich_context(context)
+
+        if not self.manager:
+            return self._build_llm_unavailable_response()
+
         session = self._get_session(session_id)
         prompt = f"Query: {query}\nContext: {json.dumps(enriched_context, default=str)}"
         try:
             result = await self.manager.run(prompt, session=session)
             parsed = self._parse_response_safely(result)
             return self._build_agent_response(parsed).model_dump(by_alias=True)
-        except Exception:
+        except Exception as exc:
+            logger.exception("Primary agent run failed: %s", exc)
             return await self._process_with_fallback(query, enriched_context)
 
     async def _process_with_fallback(self, query: str, enriched_context: Dict[str, Any]) -> Dict[str, Any]:
-        client = create_chat_client()
+        try:
+            client = create_chat_client()
+        except Exception:
+            return self._build_llm_unavailable_response()
+
         fallback_agent = Agent(
             client=client,
             name="VehicleManagerFallback",
@@ -147,7 +187,11 @@ class AgentManager:
             tools=self._all_tools,
         )
         prompt = f"Query: {query}\nContext: {json.dumps(enriched_context, default=str)}"
-        result = await fallback_agent.run(prompt)
+        try:
+            result = await fallback_agent.run(prompt)
+        except Exception as exc:
+            logger.exception("Fallback agent run failed: %s", exc)
+            return self._build_llm_unavailable_response()
         parsed = self._parse_response_safely(result)
         return self._build_agent_response(parsed, fallback_used=True).model_dump(by_alias=True)
 
@@ -156,6 +200,16 @@ class AgentManager:
         context["query"] = query
         enriched_context = await self._enrich_context(context)
         yield StreamingChunk(response="Processing your request...", complete=False).model_dump(by_alias=True)
+
+        if not self.manager:
+            unavailable = self._build_llm_unavailable_response()
+            yield StreamingChunk(
+                response=unavailable.get("response", "Error processing request."),
+                complete=True,
+                plugins_used=[],
+                error=unavailable.get("error"),
+            ).model_dump(by_alias=True)
+            return
 
         session = self._get_session(session_id)
         prompt = f"Query: {query}\nContext: {json.dumps(enriched_context, default=str)}"

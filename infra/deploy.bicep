@@ -70,6 +70,9 @@ param azureOpenAiResourceId string = ''
 @description('Resource ID of existing Azure Speech / Cognitive Services account (for RBAC)')
 param azureSpeechResourceId string = ''
 
+@description('Azure Speech endpoint (custom subdomain, e.g. https://my-speech.cognitiveservices.azure.com)')
+param azureSpeechEndpoint string = ''
+
 @description('Azure Speech region (e.g. eastus)')
 param azureSpeechRegion string = location
 
@@ -106,8 +109,21 @@ var cosmosDbAccountNameEffective = '${cosmosDbAccountName}${uniqueSuffix}'
 // Azure OpenAI RBAC: Cognitive Services OpenAI User
 var cognitiveServicesOpenAiUserRoleId = '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd'
 
-// Azure Speech RBAC: Cognitive Services Speech User
-var cognitiveServicesSpeechUserRoleId = 'f2dc8367-1007-4938-bd23-fe263f013447'
+// Azure Speech RBAC: Cognitive Services User (required for STS token issuance)
+var cognitiveServicesUserRoleId = 'a97b65f3-24c7-4388-baec-2e87135dc908'
+
+// Cosmos DB SQL RBAC: Built-in Data Contributor
+var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'
+
+// Parsed segments from azureOpenAiResourceId for cross-RG module scope
+var openAiSubId = !empty(azureOpenAiResourceId) ? split(azureOpenAiResourceId, '/')[2] : subscription().subscriptionId
+var openAiRgName = !empty(azureOpenAiResourceId) ? split(azureOpenAiResourceId, '/')[4] : resourceGroup().name
+var openAiAccountName = !empty(azureOpenAiResourceId) ? last(split(azureOpenAiResourceId, '/')) : 'none'
+
+// Parsed segments from azureSpeechResourceId for cross-RG module scope
+var speechSubId = !empty(azureSpeechResourceId) ? split(azureSpeechResourceId, '/')[2] : subscription().subscriptionId
+var speechRgName = !empty(azureSpeechResourceId) ? split(azureSpeechResourceId, '/')[4] : resourceGroup().name
+var speechAccountName = !empty(azureSpeechResourceId) ? last(split(azureSpeechResourceId, '/')) : 'none'
 
 // ── Cosmos DB ───────────────────────────────────────────────────────
 resource cosmosNew 'Microsoft.DocumentDB/databaseAccounts@2025-05-01-preview' = if (cosmosMode == 'new') {
@@ -132,10 +148,6 @@ resource cosmosNew 'Microsoft.DocumentDB/databaseAccounts@2025-05-01-preview' = 
 
 var cosmosAccountName = cosmosMode == 'new' ? cosmosNew.name : last(split(cosmosDbAccountResourceId, '/'))
 var cosmosAccountId = cosmosMode == 'new' ? cosmosNew.id : cosmosDbAccountResourceId
-
-resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2025-05-01-preview' existing = {
-  name: cosmosAccountName
-}
 
 var cosmosEndpoint = reference(cosmosAccountId, cosmosApiVersion).documentEndpoint
 
@@ -285,6 +297,10 @@ resource webApp 'Microsoft.Web/sites@2024-11-01' = {
           name: 'AZURE_SPEECH_REGION'
           value: azureSpeechRegion
         }
+        {
+          name: 'AZURE_SPEECH_ENDPOINT'
+          value: azureSpeechEndpoint
+        }
 
         // ── Cosmos DB (managed identity) ──
         {
@@ -332,51 +348,41 @@ resource webApp 'Microsoft.Web/sites@2024-11-01' = {
   ] : []
 }
 
-// ── RBAC: Cosmos DB Data Contributor → Web App ──────────────────────
-resource cosmosDataContributorRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions@2024-12-01-preview' existing = {
-  name: '00000000-0000-0000-0000-000000000002'
-  parent: cosmosAccount
-}
-
-resource userToCosmosAccountScope 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = if (!empty(debugUserPrincipalId)) {
-  name: guid('cosmosdb-userid', cosmosDataContributorRole.id, debugUserPrincipalId)
-  parent: cosmosAccount
-  properties: {
-    roleDefinitionId: cosmosDataContributorRole.id
+module cosmosUserRbac 'modules/cognitive-rbac.bicep' = if (!empty(debugUserPrincipalId)) {
+  params: {
+    assignmentKind: 'cosmosSql'
+    accountName: cosmosAccountName
     principalId: debugUserPrincipalId
-    scope: cosmosAccount.id
+    roleDefinitionId: cosmosDataContributorRoleId
   }
 }
 
-resource webAppToCosmosAccountScope 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-12-01-preview' = {
-  name: guid('cosmosdb-webapp', cosmosDataContributorRole.id, webApp.name)
-  parent: cosmosAccount
-  properties: {
-    roleDefinitionId: cosmosDataContributorRole.id
+module cosmosWebAppRbac 'modules/cognitive-rbac.bicep' = {
+  params: {
+    assignmentKind: 'cosmosSql'
+    accountName: cosmosAccountName
     principalId: webApp.identity.principalId
-    scope: cosmosAccount.id
+    roleDefinitionId: cosmosDataContributorRoleId
   }
 }
 
-// ── RBAC: Azure OpenAI Cognitive Services OpenAI User → Web App ─────
-resource openAiRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(azureOpenAiResourceId)) {
-  name: guid('openai-webapp', azureOpenAiResourceId, webApp.name, cognitiveServicesOpenAiUserRoleId)
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesOpenAiUserRoleId)
+module openAiRbac 'modules/cognitive-rbac.bicep' = if (!empty(azureOpenAiResourceId)) {
+  scope: resourceGroup(openAiSubId, openAiRgName)
+  params: {
+    assignmentKind: 'cognitive'
+    accountName: openAiAccountName
     principalId: webApp.identity.principalId
-    principalType: 'ServicePrincipal'
+    roleDefinitionId: cognitiveServicesOpenAiUserRoleId
   }
 }
 
-// ── RBAC: Azure Speech Cognitive Services Speech User → Web App ─────
-resource speechRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(azureSpeechResourceId)) {
-  name: guid('speech-webapp', azureSpeechResourceId, webApp.name, cognitiveServicesSpeechUserRoleId)
-  scope: resourceGroup()
-  properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', cognitiveServicesSpeechUserRoleId)
+module speechRbac 'modules/cognitive-rbac.bicep' = if (!empty(azureSpeechResourceId)) {
+  scope: resourceGroup(speechSubId, speechRgName)
+  params: {
+    assignmentKind: 'cognitive'
+    accountName: speechAccountName
     principalId: webApp.identity.principalId
-    principalType: 'ServicePrincipal'
+    roleDefinitionId: cognitiveServicesUserRoleId
   }
 }
 
